@@ -151,7 +151,20 @@ function initFirebase(cfg) {
 }
 
 function startListener() {
-  if (!fbRef) return;
+  if (!fbRef || !fbDb) return;
+
+  // Listen for CLEAR signal — any device that clears will broadcast to all others
+  fbDb.ref('duemaster_cleared').on('value', snap => {
+    if (!snap.val()) return; // null = signal removed, ignore
+    if (fbClearing) return;  // we triggered this clear ourselves, ignore
+    // Another device cleared — clear this device too
+    state.customers = [];
+    try { localStorage.removeItem(STORAGE_KEY); } catch{}
+    render();
+    updateSyncStatus('🗑️ Cleared by another device', '#f59e0b');
+  });
+
+  // Listen for data changes
   fbListener = fbRef.on('value', snap => {
     if (fbIgnoreNext) { fbIgnoreNext = false; return; }
     if (fbClearing) return;
@@ -182,6 +195,7 @@ function pushToFirebase() {
 }
 
 function disconnectFirebase() {
+  if (fbDb) { try { fbDb.ref('duemaster_cleared').off(); } catch{} }
   if (fbRef && fbListener) { fbRef.off('value', fbListener); fbListener = null; }
   if (fbApp) { try { fbApp.delete(); } catch{} fbApp=null; fbDb=null; fbRef=null; }
   state.fbConnected = false;
@@ -501,53 +515,45 @@ function confirmRestore(mode) {
 function handleClear() {
   state.customers = [];
   try { localStorage.removeItem(STORAGE_KEY); } catch{}
-
   state.showClearConfirm = false;
   state.clearPhase = 1;
   state.clearInput = '';
 
-  if (!fbRef) {
-    showToast('All data cleared. Fresh start! 🗑️', 'info');
+  if (!fbRef || !fbDb) {
+    showToast('All data cleared! 🗑️', 'info');
     render();
     return;
   }
 
-  // Set clearing flag so listener ignores ALL incoming events
+  // Block our own listener from reacting to the clear signal
   fbClearing = true;
-
-  // Stop listener completely
   if (fbListener) { fbRef.off('value', fbListener); fbListener = null; }
 
-  // Delete from Firebase
-  fbRef.set(null)
+  // 1. Broadcast CLEAR signal to all other devices
+  // 2. Delete all data from Firebase
+  // 3. Remove the CLEAR signal after 3s
+  // 4. Restart listener after 2s
+  fbDb.ref('duemaster_cleared').set(true)
+    .then(() => fbRef.set(null))
     .then(() => {
-      updateSyncStatus('✅ Cleared & Synced', '#16a34a');
-      // Wait 1 second then restart listener safely
+      updateSyncStatus('🗑️ Cleared on all devices', '#f59e0b');
+      render();
+      setTimeout(() => {
+        fbDb.ref('duemaster_cleared').set(null).catch(()=>{});
+      }, 3000);
       setTimeout(() => {
         fbClearing = false;
-        fbListener = fbRef.on('value', snap => {
-          if (fbClearing) return;
-          const raw = snap.val();
-          if (raw === null || raw === undefined) {
-            updateSyncStatus('✅ Synced', '#16a34a');
-            return;
-          }
-          let data = Array.isArray(raw) ? raw.filter(Boolean) : Object.values(raw).filter(Boolean);
-          if (data.length > 0) {
-            state.customers = data;
-            saveLocal();
-            render();
-            updateSyncStatus('✅ Synced', '#16a34a');
-          }
-        }, err => updateSyncStatus('❌ Sync error', '#ef4444'));
-      }, 1000);
+        startListener();
+        updateSyncStatus('✅ Synced', '#16a34a');
+      }, 2000);
     })
     .catch(() => {
       fbClearing = false;
+      startListener();
       updateSyncStatus('❌ Clear failed on Firebase', '#ef4444');
     });
 
-  showToast('All data cleared. Fresh start! 🗑️', 'info');
+  showToast('All data cleared on all devices! 🗑️', 'info');
   render();
 }
 
