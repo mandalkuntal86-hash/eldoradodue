@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>DueMaster Pro</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;800&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet"/>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -63,18 +65,103 @@ let state = {
   restorePreview: null,
   bulkImport: { stage: 'upload', preview: null, mapping: {}, result: null, drag: false },
   restoreDrag: false,
+  fbConnected: false,
+  syncStatus: { msg: '', color: '' },
+  showFbSetup: false,
+  fbForm: { apiKey:'', authDomain:'', databaseURL:'', projectId:'' },
   form: { name:'', phone:'', email:'', refNo:'', amount:'', dueDate:'', reminderDate:'', reminderNote:'', notes:'' }
 };
 
 // ── PERSIST ──────────────────────────────────────────────────────────────────
-function saveData() {
+// ── FIREBASE ──────────────────────────────────────────────────────────────────
+let fbApp = null, fbDb = null, fbRef = null, fbListener = null;
+
+function getFbConfig() {
+  try { return JSON.parse(localStorage.getItem('dm_fb_config')||'null'); } catch{ return null; }
+}
+function saveFbConfig(cfg) {
+  try { localStorage.setItem('dm_fb_config', JSON.stringify(cfg)); } catch{}
+}
+function clearFbConfig() {
+  try { localStorage.removeItem('dm_fb_config'); } catch{}
+}
+
+function initFirebase(cfg) {
+  try {
+    if (fbApp) { try { fbApp.delete(); } catch{} }
+    fbApp = firebase.initializeApp(cfg, 'duemaster_' + Date.now());
+    fbDb  = fbApp.database();
+    fbRef = fbDb.ref('duemaster_data');
+    // Listen for real-time changes from other devices
+    if (fbListener) fbRef.off('value', fbListener);
+    fbListener = fbRef.on('value', snap => {
+      const data = snap.val();
+      if (data && Array.isArray(data)) {
+        state.customers = data;
+        saveLocal();
+        render();
+        updateSyncStatus('✅ Synced', '#16a34a');
+      } else if (data === null) {
+        // Empty db — push local data
+        if (state.customers.length > 0) pushToFirebase();
+      }
+    }, err => {
+      updateSyncStatus('❌ Sync error', '#ef4444');
+    });
+    state.fbConnected = true;
+    saveFbConfig(cfg);
+    return true;
+  } catch(e) {
+    state.fbConnected = false;
+    return false;
+  }
+}
+
+function pushToFirebase() {
+  if (!fbRef) return;
+  fbRef.set(state.customers)
+    .then(() => updateSyncStatus('✅ Synced', '#16a34a'))
+    .catch(() => updateSyncStatus('❌ Sync failed', '#ef4444'));
+}
+
+function disconnectFirebase() {
+  if (fbRef && fbListener) { fbRef.off('value', fbListener); fbListener = null; }
+  if (fbApp) { try { fbApp.delete(); } catch{} fbApp=null; fbDb=null; fbRef=null; }
+  state.fbConnected = false;
+  clearFbConfig();
+  updateSyncStatus('', '');
+}
+
+function updateSyncStatus(msg, color) {
+  state.syncStatus = { msg, color };
+  // Update header badge without full re-render
+  const el = document.getElementById('syncBadge');
+  if (el && msg) { el.textContent = msg; el.style.background = color; el.style.display='inline'; }
+  else if (el) { el.style.display='none'; }
+}
+
+// ── LOCAL STORAGE ─────────────────────────────────────────────────────────────
+function saveLocal() {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state.customers)); } catch(e) {}
 }
+
+function saveData() {
+  saveLocal();
+  if (fbRef) pushToFirebase();
+}
+
 function loadData() {
   try {
     const d = localStorage.getItem(STORAGE_KEY);
     if (d) state.customers = JSON.parse(d);
   } catch(e) {}
+  // Auto-reconnect Firebase if config saved
+  const cfg = getFbConfig();
+  if (cfg) {
+    state.fbConnected = false;
+    state.syncStatus = { msg: '🔄 Connecting…', color: '#f59e0b' };
+    setTimeout(() => initFirebase(cfg), 500);
+  }
 }
 
 // ── UTILS ────────────────────────────────────────────────────────────────────
@@ -348,6 +435,7 @@ function confirmRestore(mode) {
 function handleClear() {
   state.customers=[];
   try{localStorage.removeItem(STORAGE_KEY);}catch{}
+  if(fbRef) fbRef.set([]);
   state.showClearConfirm=false; state.clearPhase=1; state.clearInput='';
   showToast('All data cleared. Fresh start! 🗑️','info'); render();
 }
@@ -437,7 +525,7 @@ function render() {
         <div style="width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#3b82f6,#1d4ed8);display:flex;align-items:center;justify-content:center;font-size:17px">💳</div>
         <div>
           <div style="color:#fff;font-weight:800;font-size:14px;font-family:'Playfair Display',serif">DueMaster Pro</div>
-          <div style="color:#93c5fd;font-size:9px;font-weight:500;letter-spacing:.08em;text-transform:uppercase">Due · Collection · Reminder <span style="background:#16a34a;color:#fff;border-radius:4px;padding:1px 5px;font-size:8px;font-weight:700">💾 SAVED</span></div>
+          <div style="color:#93c5fd;font-size:9px;font-weight:500;letter-spacing:.08em;text-transform:uppercase">Due · Collection · Reminder <span style="background:#16a34a;color:#fff;border-radius:4px;padding:1px 5px;font-size:8px;font-weight:700">💾 SAVED</span> ${state.syncStatus.msg?`<span id="syncBadge" style="background:${state.syncStatus.color};color:#fff;border-radius:4px;padding:1px 5px;font-size:8px;font-weight:700;margin-left:3px">${state.syncStatus.msg}</span>`:`<span id="syncBadge" style="display:none"></span>`}</div>
         </div>
       </div>
       <nav style="display:flex;gap:1px;flex-wrap:wrap">${nav}</nav>
@@ -750,6 +838,18 @@ function render() {
             <div><div style="font-size:9px;color:#93c5fd;text-transform:uppercase;letter-spacing:.07em">${x.l}</div><div style="font-size:18px;font-weight:800;font-family:'Playfair Display',serif">${x.v}</div></div>`).join('')}
         </div>
       </div>
+      <div style="background:#fff;border-radius:12px;padding:18px 20px;margin-bottom:14px;box-shadow:0 2px 8px rgba(0,0,0,0.06);border:1.5px solid ${state.fbConnected?'#86efac':'#e2e8f0'}">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;flex-wrap:wrap;gap:8px">
+          <div style="font-size:13px;font-weight:700;color:#0f172a;display:flex;align-items:center;gap:6px">🔥 Firebase Auto-Sync ${state.fbConnected?'<span style="background:#dcfce7;color:#16a34a;font-size:10px;padding:2px 8px;border-radius:20px;font-weight:700">● CONNECTED</span>':'<span style="background:#f1f5f9;color:#64748b;font-size:10px;padding:2px 8px;border-radius:20px;font-weight:700">○ NOT SET UP</span>'}</div>
+        </div>
+        <p style="margin:0 0 12px;color:#64748b;font-size:11px">${state.fbConnected?'Your data syncs automatically across all devices in real-time.':'Connect Firebase to sync data instantly across all your devices — phone, laptop, office PC.'}</p>
+        ${state.fbConnected?`
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button onclick="pushToFirebase();showToast('⬆️ Pushed to Firebase!')" style="flex:1;padding:9px 14px;background:linear-gradient(135deg,#f97316,#ea580c);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer">⬆️ Push Now</button>
+            <button onclick="disconnectFirebase();showToast('Disconnected from Firebase','info');render()" style="padding:9px 14px;background:#fff1f2;color:#e11d48;border:1.5px solid #fca5a5;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">Disconnect</button>
+          </div>`:`
+          <button onclick="state.showFbSetup=true;render()" style="padding:9px 18px;background:linear-gradient(135deg,#f97316,#ea580c);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:6px">🔥 Connect Firebase</button>`}
+      </div>
       <div style="background:#fff;border-radius:12px;padding:18px 20px;margin-bottom:14px;box-shadow:0 2px 8px rgba(0,0,0,0.06)">
         <div style="font-size:13px;font-weight:700;color:#0f172a;margin-bottom:4px;display:flex;align-items:center;gap:6px">⬇️ Download Backup</div>
         <p style="margin:0 0 14px;color:#64748b;font-size:11px">Save a copy of all your data. Always backup before clearing!</p>
@@ -872,7 +972,36 @@ function render() {
       </div></div>`;
   }
 
-  // Confirm Delete Modal
+  // Firebase Setup Modal
+  if(state.showFbSetup){
+    const ff=state.fbForm;
+    html+=`<div class="modal-overlay" onclick="if(event.target===this){state.showFbSetup=false;render()}">
+      <div class="modal-box" style="max-width:520px">
+        <div class="modal-header"><h3 style="margin:0;font-size:15px;font-weight:700;color:#0f172a;font-family:'Playfair Display',serif">🔥 Connect Firebase</h3><button onclick="state.showFbSetup=false;render()" style="background:none;border:none;cursor:pointer;color:#64748b">${IC.X}</button></div>
+        <div class="modal-body">
+          <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:9px;padding:12px 14px;margin-bottom:16px;font-size:11px;color:#92400e">
+            <strong>📋 How to get your Firebase config (5 minutes):</strong><br/>
+            1. Go to <a href="https://console.firebase.google.com" target="_blank" style="color:#ea580c">console.firebase.google.com</a><br/>
+            2. Click <strong>Add project</strong> → name it <strong>duemaster</strong> → Create<br/>
+            3. Click <strong>Web icon (&lt;/&gt;)</strong> → Register app → name it <strong>duemaster</strong><br/>
+            4. Copy the config values shown and paste below<br/>
+            5. Go to <strong>Build → Realtime Database → Create database → Start in test mode</strong>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px">
+            <div style="grid-column:1/-1"><div class="field-wrap"><label class="field-label">API Key *</label><input class="inp" value="${ff.apiKey.replace(/"/g,'&quot;')}" oninput="state.fbForm.apiKey=this.value" placeholder="AIzaSy..."/></div></div>
+            <div class="field-wrap"><label class="field-label">Auth Domain *</label><input class="inp" value="${ff.authDomain.replace(/"/g,'&quot;')}" oninput="state.fbForm.authDomain=this.value" placeholder="yourapp.firebaseapp.com"/></div>
+            <div class="field-wrap"><label class="field-label">Project ID *</label><input class="inp" value="${ff.projectId.replace(/"/g,'&quot;')}" oninput="state.fbForm.projectId=this.value" placeholder="your-project-id"/></div>
+            <div style="grid-column:1/-1"><div class="field-wrap"><label class="field-label">Database URL *</label><input class="inp" value="${ff.databaseURL.replace(/"/g,'&quot;')}" oninput="state.fbForm.databaseURL=this.value" placeholder="https://your-project-default-rtdb.firebaseio.com"/></div></div>
+          </div>
+          <div id="fbErr" style="color:#ef4444;font-size:12px;margin-bottom:10px;display:none"></div>
+          <div style="display:flex;gap:8px">
+            <button onclick="connectFirebase()" style="flex:1;padding:11px;background:linear-gradient(135deg,#f97316,#ea580c);color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">🔥 Connect & Sync</button>
+            <button onclick="state.showFbSetup=false;render()" class="btn-cancel">Cancel</button>
+          </div>
+          <p style="margin:12px 0 0;font-size:10px;color:#94a3b8;text-align:center">Your Firebase config is saved only on this device. Data syncs instantly across all connected devices.</p>
+        </div>
+      </div></div>`;
+  }
   if(state.confirmDel){
     html+=`<div class="modal-overlay" onclick="if(event.target===this){state.confirmDel=null;render()}">
       <div class="modal-box" style="max-width:320px;text-align:center">
@@ -973,6 +1102,30 @@ function handleRestoreFile(file) {
   if(ext==='json') handleRestoreJSON(file);
   else if(['xlsx','xls'].includes(ext)) handleRestoreExcel(file);
   else showToast('Please upload .xlsx, .xls or .json file','error');
+}
+
+function connectFirebase() {
+  const ff = state.fbForm;
+  const errEl = document.getElementById('fbErr');
+  if(!ff.apiKey||!ff.authDomain||!ff.databaseURL||!ff.projectId){
+    if(errEl){errEl.textContent='Please fill all fields';errEl.style.display='block';}
+    return;
+  }
+  const cfg = {
+    apiKey: ff.apiKey.trim(),
+    authDomain: ff.authDomain.trim(),
+    databaseURL: ff.databaseURL.trim(),
+    projectId: ff.projectId.trim()
+  };
+  if(errEl){errEl.textContent='Connecting…';errEl.style.display='block';errEl.style.color='#f97316';}
+  const ok = initFirebase(cfg);
+  if(ok){
+    state.showFbSetup=false;
+    showToast('🔥 Firebase connected! Syncing…');
+    render();
+  } else {
+    if(errEl){errEl.textContent='Connection failed. Check your config values.';errEl.style.color='#ef4444';errEl.style.display='block';}
+  }
 }
 
 function updateClearBtn() {
