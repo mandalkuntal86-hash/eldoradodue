@@ -418,6 +418,33 @@ function handleBulkImport(records) {
   saveData(); showToast(`✅ Imported ${records.length} records!`); render();
 }
 
+function handleMonthExport(monthKey) {
+  if(!monthKey){showToast('No month selected','info');return;}
+  const rows=[];
+  state.customers.forEach(c=>{
+    (c.collections||[]).forEach(x=>{
+      if(!x.date) return;
+      const d = new Date(x.date);
+      const key = d.getFullYear()+'-'+(d.getMonth()+1).toString().padStart(2,'0');
+      if(key!==monthKey) return;
+      rows.push({'Customer Name':c.name,'Ref No.':c.refNo||'','Phone':c.phone||'','Amount Collected':x.amount,'Payment Mode':x.mode,'Payment Date':x.date,'Note':x.note||'','Total Due':c.amount,'Status':c.paid?'Paid':'Unpaid'});
+    });
+  });
+  if(!rows.length){showToast('No collections for this month','info');return;}
+  const [yr,mn]=monthKey.split('-');
+  const monthName=new Date(yr,mn-1,1).toLocaleDateString('en-IN',{month:'long',year:'numeric'});
+  // Summary row
+  const total=rows.reduce((s,r)=>s+r['Amount Collected'],0);
+  rows.push({});
+  rows.push({'Customer Name':'TOTAL','Amount Collected':total});
+  const ws=XLSX.utils.json_to_sheet(rows);
+  ws['!cols']=[22,14,13,16,14,14,20,12,10].map(w=>({wch:w}));
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,monthName.slice(0,31));
+  XLSX.writeFile(wb,`Collection_${monthName.replace(' ','_')}.xlsx`);
+  showToast(`✅ ${monthName} report downloaded! (${rows.length-2} entries)`);
+}
+
 function handleBackupExcel() {
   if(!state.customers.length){showToast('No data to backup','info');return;}
   const rows=state.customers.map(c=>{
@@ -859,11 +886,101 @@ function render() {
 
   // ── COLLECTION ──
   if(state.tab==='Collection'){
-    html+=`<h2 style="margin:0 0 16px;font-size:19px;font-weight:800;color:#0f172a;font-family:'Playfair Display',serif">💰 Collection Report</h2>
+
+    // ── Build month-wise data ──
+    const monthMap = {};
+    state.customers.forEach(c=>{
+      (c.collections||[]).forEach(x=>{
+        if(!x.date) return;
+        const d = new Date(x.date);
+        const key = d.getFullYear()+'-'+(d.getMonth()+1).toString().padStart(2,'0');
+        const label = d.toLocaleDateString('en-IN',{month:'long',year:'numeric'});
+        if(!monthMap[key]) monthMap[key]={key,label,total:0,count:0,entries:[]};
+        monthMap[key].total += x.amount;
+        monthMap[key].count++;
+        monthMap[key].entries.push({...x, custName:c.name, refNo:c.refNo||''});
+      });
+    });
+    const monthList = Object.values(monthMap).sort((a,b)=>b.key.localeCompare(a.key));
+    const selectedMonth = state.selectedMonth || (monthList.length>0 ? monthList[0].key : '');
+    if(!state.selectedMonth && monthList.length>0) state.selectedMonth = monthList[0].key;
+    const selMonthData = monthMap[selectedMonth];
+
+    html+=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+      <h2 style="margin:0;font-size:19px;font-weight:800;color:#0f172a;font-family:'Playfair Display',serif">💰 Collection Report</h2>
+    </div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px">
-      ${statCard('Total Collected',fc(totalCollected),'#16a34a','All payments',IC.collect)}
+      ${statCard('Total Collected',fc(totalCollected),'#16a34a','All time',IC.collect)}
       ${statCard('Balance Pending',fc(totalPending),'#ef4444',unpaid.length+' unpaid',IC.warn)}
       ${statCard('Fully Paid',state.customers.filter(c=>c.paid).length,'#2563eb','Customers',IC.chk)}
+      ${statCard('This Month',fc(monthList.length>0&&monthMap[new Date().getFullYear()+'-'+(new Date().getMonth()+1).toString().padStart(2,'0')]?monthMap[new Date().getFullYear()+'-'+(new Date().getMonth()+1).toString().padStart(2,'0')].total:0),'#7c3aed',new Date().toLocaleDateString('en-IN',{month:'short',year:'numeric'}),IC.cal)}
+    </div>
+
+    <!-- Month-wise Summary Bar -->
+    <div style="background:#fff;border-radius:12px;padding:16px 18px;margin-bottom:18px;box-shadow:0 2px 8px rgba(0,0,0,0.06)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+        <h3 style="margin:0;font-size:13px;font-weight:700;color:#0f172a">📅 Month-wise Collection</h3>
+        <div style="display:flex;align-items:center;gap:8px">
+          <select onchange="state.selectedMonth=this.value;render()" style="padding:6px 10px;border:1.5px solid #e2e8f0;border-radius:7px;font-size:12px;font-weight:600;color:#0f172a;background:#f8fafc;cursor:pointer">
+            ${monthList.map(m=>`<option value="${m.key}" ${m.key===selectedMonth?'selected':''}>${m.label}</option>`).join('')}
+            ${!monthList.length?'<option>No data yet</option>':''}
+          </select>
+          <button onclick="handleMonthExport('${selectedMonth}')" style="padding:6px 12px;background:linear-gradient(135deg,#16a34a,#15803d);color:#fff;border:none;border-radius:7px;font-size:11px;font-weight:700;cursor:pointer">⬇️ Export</button>
+        </div>
+      </div>
+
+      <!-- Month cards scrollable -->
+      <div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;margin-bottom:14px">
+        ${monthList.slice(0,12).map(m=>`
+          <div onclick="state.selectedMonth='${m.key}';render()" style="flex-shrink:0;min-width:100px;background:${m.key===selectedMonth?'linear-gradient(135deg,#1d4ed8,#2563eb)':'#f8fafc'};border-radius:10px;padding:10px 12px;cursor:pointer;border:1.5px solid ${m.key===selectedMonth?'#2563eb':'#e2e8f0'};transition:all .15s">
+            <div style="font-size:9px;font-weight:700;color:${m.key===selectedMonth?'#bfdbfe':'#64748b'};text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">${m.label.split(' ')[0]}</div>
+            <div style="font-size:11px;font-weight:800;color:${m.key===selectedMonth?'#fff':'#0f172a'}">${fc(m.total)}</div>
+            <div style="font-size:9px;color:${m.key===selectedMonth?'#93c5fd':'#94a3b8'};margin-top:2px">${m.count} payment${m.count!==1?'s':''}</div>
+          </div>`).join('')}
+        ${!monthList.length?`<div style="color:#94a3b8;font-size:12px;padding:16px">No collections recorded yet.</div>`:''}
+      </div>
+
+      <!-- Selected month detail -->
+      ${selMonthData?`
+      <div style="border-top:1px solid #f1f5f9;padding-top:14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+          <div>
+            <div style="font-size:13px;font-weight:700;color:#0f172a">${selMonthData.label}</div>
+            <div style="font-size:10px;color:#64748b">${selMonthData.count} payment${selMonthData.count!==1?'s':''} · ${[...new Set(selMonthData.entries.map(e=>e.custName))].length} customers</div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-size:18px;font-weight:800;color:#16a34a;font-family:'Playfair Display',serif">${fc(selMonthData.total)}</div>
+            <div style="font-size:10px;color:#64748b">Total collected</div>
+          </div>
+        </div>
+        <!-- Payment mode breakdown -->
+        ${(()=>{
+          const modes={};
+          selMonthData.entries.forEach(e=>{modes[e.mode]=(modes[e.mode]||0)+e.amount;});
+          return `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">
+            ${Object.entries(modes).map(([m,v])=>`
+              <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:7px;padding:5px 10px;font-size:10px">
+                <span style="font-weight:700;color:#16a34a">${fc(v)}</span>
+                <span style="color:#64748b;margin-left:4px">${m}</span>
+              </div>`).join('')}
+          </div>`;
+        })()}
+        <!-- Entries list -->
+        <div style="max-height:320px;overflow-y:auto">
+          ${[...selMonthData.entries].sort((a,b)=>new Date(b.date)-new Date(a.date)).map((x,i)=>`
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:${i%2?'#fff':'#f8fafc'};border-radius:7px;margin-bottom:3px;font-size:11px;gap:8px;flex-wrap:wrap">
+              <div style="flex:1;min-width:100px">
+                <div style="font-weight:700;color:#0f172a">${x.custName}</div>
+                <div style="font-size:10px;color:#64748b">${x.refNo||'No Ref'}${x.note?' · '+x.note:''}</div>
+              </div>
+              <div style="display:flex;align-items:center;gap:6px">
+                <span style="background:#e0f2fe;color:#0369a1;padding:1px 6px;border-radius:4px;font-size:10px">${x.mode}</span>
+                <span style="font-weight:800;color:#16a34a">${fc(x.amount)}</span>
+                <span style="color:#94a3b8;font-size:10px">${fd(x.date)}</span>
+              </div>
+            </div>`).join('')}
+        </div>
+      </div>`:`<div style="text-align:center;padding:20px;color:#94a3b8;font-size:12px">No data for selected month</div>`}
     </div>`;
 
     const partials=unpaid.filter(c=>(c.collections||[]).length>0);
