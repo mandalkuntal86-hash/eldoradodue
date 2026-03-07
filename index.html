@@ -75,7 +75,10 @@ let state = {
 // ── PERSIST ──────────────────────────────────────────────────────────────────
 // ── FIREBASE ──────────────────────────────────────────────────────────────────
 let fbApp = null, fbDb = null, fbRef = null, fbListener = null;
+let fbIgnoreNext = false;
+let fbClearing = false;
 
+// Config stored in localStorage on each device
 function getFbConfig() {
   try { return JSON.parse(localStorage.getItem('dm_fb_config')||'null'); } catch{ return null; }
 }
@@ -86,42 +89,96 @@ function clearFbConfig() {
   try { localStorage.removeItem('dm_fb_config'); } catch{}
 }
 
+// ── BOOTSTRAP: fetch config from Firebase using only databaseURL ──────────────
+// Any device that knows the databaseURL can auto-connect
+// We store the full config at a fixed path in the database
+const BOOTSTRAP_KEY = 'dm_bootstrap_config';
+
+function bootstrapConnect(databaseURL) {
+  // Use fetch to read config from Firebase REST API — no SDK needed yet
+  const url = databaseURL.replace(/\/$/, '') + '/' + BOOTSTRAP_KEY + '.json';
+  updateSyncStatus('🔄 Connecting…', '#f59e0b');
+  fetch(url)
+    .then(r => r.json())
+    .then(cfg => {
+      if (cfg && cfg.apiKey) {
+        saveFbConfig(cfg);
+        waitForSDK(cfg, 10);
+      } else {
+        updateSyncStatus('❌ Config not found', '#ef4444');
+        render();
+      }
+    })
+    .catch(() => {
+      updateSyncStatus('❌ Cannot reach Firebase', '#ef4444');
+      render();
+    });
+}
+
+function waitForSDK(cfg, attempts) {
+  if (typeof firebase !== 'undefined' && firebase.initializeApp) {
+    initFirebase(cfg);
+  } else if (attempts > 0) {
+    setTimeout(() => waitForSDK(cfg, attempts - 1), 300);
+  } else {
+    updateSyncStatus('❌ Firebase SDK failed to load', '#ef4444');
+    render();
+  }
+}
+
 function initFirebase(cfg) {
   try {
     if (fbApp) { try { fbApp.delete(); } catch{} }
     fbApp = firebase.initializeApp(cfg, 'duemaster_' + Date.now());
     fbDb  = fbApp.database();
+    // Save config into Firebase so other devices can fetch it
+    fbDb.ref(BOOTSTRAP_KEY).set(cfg).catch(()=>{});
     fbRef = fbDb.ref('duemaster_data');
-    // Listen for real-time changes from other devices
     if (fbListener) fbRef.off('value', fbListener);
-    fbListener = fbRef.on('value', snap => {
-      const data = snap.val();
-      if (data && Array.isArray(data)) {
-        state.customers = data;
-        saveLocal();
-        render();
-        updateSyncStatus('✅ Synced', '#16a34a');
-      } else if (data === null) {
-        // Empty db — push local data
-        if (state.customers.length > 0) pushToFirebase();
-      }
-    }, err => {
-      updateSyncStatus('❌ Sync error', '#ef4444');
-    });
+    startListener();
     state.fbConnected = true;
     saveFbConfig(cfg);
+    // Save databaseURL separately for easy sharing
+    try { localStorage.setItem('dm_db_url', cfg.databaseURL); } catch{}
+    render();
     return true;
   } catch(e) {
+    console.error('Firebase init error:', e);
     state.fbConnected = false;
+    updateSyncStatus('❌ Connection failed', '#ef4444');
     return false;
   }
 }
 
+function startListener() {
+  if (!fbRef) return;
+  fbListener = fbRef.on('value', snap => {
+    if (fbIgnoreNext) { fbIgnoreNext = false; return; }
+    if (fbClearing) return;
+    const raw = snap.val();
+    if (raw === null || raw === undefined) {
+      updateSyncStatus('✅ Synced', '#16a34a');
+      return;
+    }
+    let data = Array.isArray(raw) ? raw.filter(Boolean) : Object.values(raw).filter(Boolean);
+    if (data.length > 0) {
+      state.customers = data;
+      saveLocal();
+      render();
+      updateSyncStatus('✅ Synced', '#16a34a');
+    }
+  }, err => {
+    updateSyncStatus('❌ Sync error — check Firebase rules', '#ef4444');
+  });
+}
+
 function pushToFirebase() {
   if (!fbRef) return;
-  fbRef.set(state.customers)
+  fbIgnoreNext = true;
+  const dataToStore = state.customers.length > 0 ? state.customers : null;
+  fbRef.set(dataToStore)
     .then(() => updateSyncStatus('✅ Synced', '#16a34a'))
-    .catch(() => updateSyncStatus('❌ Sync failed', '#ef4444'));
+    .catch(e => { fbIgnoreNext = false; updateSyncStatus('❌ Sync failed', '#ef4444'); });
 }
 
 function disconnectFirebase() {
@@ -129,14 +186,14 @@ function disconnectFirebase() {
   if (fbApp) { try { fbApp.delete(); } catch{} fbApp=null; fbDb=null; fbRef=null; }
   state.fbConnected = false;
   clearFbConfig();
+  try { localStorage.removeItem('dm_db_url'); } catch{}
   updateSyncStatus('', '');
 }
 
 function updateSyncStatus(msg, color) {
   state.syncStatus = { msg, color };
-  // Update header badge without full re-render
   const el = document.getElementById('syncBadge');
-  if (el && msg) { el.textContent = msg; el.style.background = color; el.style.display='inline'; }
+  if (el && msg) { el.textContent = msg; el.style.background = color; el.style.display='inline-block'; }
   else if (el) { el.style.display='none'; }
 }
 
@@ -144,7 +201,6 @@ function updateSyncStatus(msg, color) {
 function saveLocal() {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state.customers)); } catch(e) {}
 }
-
 function saveData() {
   saveLocal();
   if (fbRef) pushToFirebase();
@@ -155,12 +211,20 @@ function loadData() {
     const d = localStorage.getItem(STORAGE_KEY);
     if (d) state.customers = JSON.parse(d);
   } catch(e) {}
-  // Auto-reconnect Firebase if config saved
+
+  // Try full config first (this device has connected before)
   const cfg = getFbConfig();
-  if (cfg) {
-    state.fbConnected = false;
+  if (cfg && cfg.apiKey) {
     state.syncStatus = { msg: '🔄 Connecting…', color: '#f59e0b' };
-    setTimeout(() => initFirebase(cfg), 500);
+    waitForSDK(cfg, 10);
+    return;
+  }
+
+  // Try databaseURL only (shared to this device)
+  const dbUrl = localStorage.getItem('dm_db_url');
+  if (dbUrl) {
+    bootstrapConnect(dbUrl);
+    return;
   }
 }
 
@@ -432,12 +496,59 @@ function confirmRestore(mode) {
   state.restorePreview=null; saveData(); render();
 }
 
+// fbClearing declared above with other Firebase variables
+
 function handleClear() {
-  state.customers=[];
-  try{localStorage.removeItem(STORAGE_KEY);}catch{}
-  if(fbRef) fbRef.set([]);
-  state.showClearConfirm=false; state.clearPhase=1; state.clearInput='';
-  showToast('All data cleared. Fresh start! 🗑️','info'); render();
+  state.customers = [];
+  try { localStorage.removeItem(STORAGE_KEY); } catch{}
+
+  state.showClearConfirm = false;
+  state.clearPhase = 1;
+  state.clearInput = '';
+
+  if (!fbRef) {
+    showToast('All data cleared. Fresh start! 🗑️', 'info');
+    render();
+    return;
+  }
+
+  // Set clearing flag so listener ignores ALL incoming events
+  fbClearing = true;
+
+  // Stop listener completely
+  if (fbListener) { fbRef.off('value', fbListener); fbListener = null; }
+
+  // Delete from Firebase
+  fbRef.set(null)
+    .then(() => {
+      updateSyncStatus('✅ Cleared & Synced', '#16a34a');
+      // Wait 1 second then restart listener safely
+      setTimeout(() => {
+        fbClearing = false;
+        fbListener = fbRef.on('value', snap => {
+          if (fbClearing) return;
+          const raw = snap.val();
+          if (raw === null || raw === undefined) {
+            updateSyncStatus('✅ Synced', '#16a34a');
+            return;
+          }
+          let data = Array.isArray(raw) ? raw.filter(Boolean) : Object.values(raw).filter(Boolean);
+          if (data.length > 0) {
+            state.customers = data;
+            saveLocal();
+            render();
+            updateSyncStatus('✅ Synced', '#16a34a');
+          }
+        }, err => updateSyncStatus('❌ Sync error', '#ef4444'));
+      }, 1000);
+    })
+    .catch(() => {
+      fbClearing = false;
+      updateSyncStatus('❌ Clear failed on Firebase', '#ef4444');
+    });
+
+  showToast('All data cleared. Fresh start! 🗑️', 'info');
+  render();
 }
 
 // ── BULK IMPORT LOGIC ────────────────────────────────────────────────────────
@@ -844,11 +955,27 @@ function render() {
         </div>
         <p style="margin:0 0 12px;color:#64748b;font-size:11px">${state.fbConnected?'Your data syncs automatically across all devices in real-time.':'Connect Firebase to sync data instantly across all your devices — phone, laptop, office PC.'}</p>
         ${state.fbConnected?`
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
             <button onclick="pushToFirebase();showToast('⬆️ Pushed to Firebase!')" style="flex:1;padding:9px 14px;background:linear-gradient(135deg,#f97316,#ea580c);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer">⬆️ Push Now</button>
             <button onclick="disconnectFirebase();showToast('Disconnected from Firebase','info');render()" style="padding:9px 14px;background:#fff1f2;color:#e11d48;border:1.5px solid #fca5a5;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">Disconnect</button>
+          </div>
+          <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:10px 13px">
+            <div style="font-size:11px;font-weight:700;color:#166534;margin-bottom:4px">📲 Auto-connect other devices</div>
+            <div style="font-size:10px;color:#64748b;margin-bottom:8px">Copy this Database URL → open app on other device → go to Backup tab → paste in "Connect by Database URL" box. That device will auto-connect forever after.</div>
+            <div style="display:flex;gap:6px">
+              <input id="dbUrlBox" readonly value="${getFbConfig()&&getFbConfig().databaseURL||''}" style="flex:1;padding:7px 10px;border:1.5px solid #86efac;border-radius:7px;font-size:10px;background:#fff;color:#374151;font-family:monospace"/>
+              <button onclick="const v=document.getElementById('dbUrlBox').value;navigator.clipboard.writeText(v).then(()=>showToast('🔗 Database URL copied! Paste on other device')).catch(()=>showToast('Copy the URL from the box manually','info'))" style="padding:7px 12px;background:#16a34a;color:#fff;border:none;border-radius:7px;font-size:11px;font-weight:700;cursor:pointer">Copy</button>
+            </div>
           </div>`:`
-          <button onclick="state.showFbSetup=true;render()" style="padding:9px 18px;background:linear-gradient(135deg,#f97316,#ea580c);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:6px">🔥 Connect Firebase</button>`}
+          <button onclick="state.showFbSetup=true;render()" style="padding:9px 18px;background:linear-gradient(135deg,#f97316,#ea580c);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:6px">🔥 Connect Firebase</button>
+          <div style="margin-top:12px;padding:12px;background:#f8fafc;border-radius:8px;border:1px solid #e2e8f0">
+            <div style="font-size:11px;font-weight:700;color:#374151;margin-bottom:4px">⚡ Quick Connect with Database URL</div>
+            <div style="font-size:10px;color:#64748b;margin-bottom:8px">If someone shared a Database URL with you, paste it here — app will auto-connect instantly and remember forever.</div>
+            <div style="display:flex;gap:6px">
+              <input id="quickDbUrl" placeholder="https://your-project-default-rtdb.firebaseio.com" style="flex:1;padding:7px 10px;border:1.5px solid #e2e8f0;border-radius:7px;font-size:10px;font-family:monospace;background:#fff;color:#374151"/>
+              <button onclick="const u=document.getElementById('quickDbUrl').value.trim();if(u){try{localStorage.setItem('dm_db_url',u);}catch{}bootstrapConnect(u);}else{showToast('Please paste the Database URL','error');}" style="padding:7px 14px;background:#f97316;color:#fff;border:none;border-radius:7px;font-size:11px;font-weight:700;cursor:pointer">Connect</button>
+            </div>
+          </div>`}
       </div>
       <div style="background:#fff;border-radius:12px;padding:18px 20px;margin-bottom:14px;box-shadow:0 2px 8px rgba(0,0,0,0.06)">
         <div style="font-size:13px;font-weight:700;color:#0f172a;margin-bottom:4px;display:flex;align-items:center;gap:6px">⬇️ Download Backup</div>
