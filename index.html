@@ -462,35 +462,88 @@ function handleBackupExcel() {
   if(!state.customers.length){showToast('No data to backup','info');return;}
   const rows=state.customers.map(c=>{
     const {collected,balance}=collectBalance(c);
-    return {'Name':c.name,'Ref No.':c.refNo||'','Phone':c.phone||'','Email':c.email||'','Total Amount':c.amount,'Collected':collected,'Balance Due':balance,'Due Date':c.dueDate,'Status':c.paid?'Paid':'Unpaid','Reminder Date':c.reminderDate||'','Reminder Note':c.reminderNote||'','Notes':c.notes||'','Created':c.createdAt?.slice(0,10)||'','Collections Count':(c.collections||[]).length};
+    return {
+      'Name':c.name,
+      'Ref No.':c.refNo||'',
+      'Phone':c.phone||'',
+      'Email':c.email||'',
+      'Total Amount':c.amount,
+      'Collected':collected,
+      'Balance Due':balance,
+      'Due Date':c.dueDate,
+      'Status':c.paid?'Paid':'Unpaid',
+      'Priority':c.priority?'Yes':'No',
+      'Assigned Employee':c.assignedEmp||'',
+      'Reminder Date':c.reminderDate||'',
+      'Reminder Note':c.reminderNote||'',
+      'Notes':c.notes||'',
+      'Created':c.createdAt?.slice(0,10)||'',
+      'Collections Count':(c.collections||[]).length
+    };
   });
   const ws=XLSX.utils.json_to_sheet(rows);
-  ws['!cols']=[22,16,13,22,14,12,12,12,14,14,20,20,12,10].map(w=>({wch:w}));
+  ws['!cols']=[22,16,13,22,14,12,12,12,10,10,18,14,20,20,12,10].map(w=>({wch:w}));
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb,ws,'Due Records');
+
+  // Collection History sheet
   const collRows=[];
   state.customers.forEach(c=>{(c.collections||[]).forEach(x=>{collRows.push({'Customer':c.name,'Ref No.':c.refNo||'','Amount Collected':x.amount,'Date':x.date,'Mode':x.mode,'Note':x.note||''});});});
   if(collRows.length){const ws2=XLSX.utils.json_to_sheet(collRows);ws2['!cols']=[22,16,16,12,14,20].map(w=>({wch:w}));XLSX.utils.book_append_sheet(wb,ws2,'Collection History');}
+
+  // Employees sheet
+  if(state.employees.length){
+    const empRows=state.employees.map(e=>{
+      const assigned=state.customers.filter(c=>c.assignedEmp===e);
+      const pending=assigned.reduce((s,c)=>s+collectBalance(c).balance,0);
+      return {'Employee Name':e,'Assigned Customers':assigned.length,'Total Pending':pending,'Priority Customers':assigned.filter(c=>c.priority).length};
+    });
+    const ws3=XLSX.utils.json_to_sheet(empRows);
+    ws3['!cols']=[22,18,14,16].map(w=>({wch:w}));
+    XLSX.utils.book_append_sheet(wb,ws3,'Employees');
+  }
+
   XLSX.writeFile(wb,`DueMaster_Backup_${new Date().toISOString().slice(0,10)}.xlsx`);
-  showToast(`✅ Backup downloaded! (${state.customers.length} records)`);
+  showToast(`✅ Backup downloaded! (${state.customers.length} records, ${state.employees.length} employees)`);
 }
 
 function handleBackupJSON() {
   if(!state.customers.length){showToast('No data to backup','info');return;}
-  const blob=new Blob([JSON.stringify(state.customers,null,2)],{type:'application/json'});
+  const backup = {
+    version: 2,
+    exportedAt: new Date().toISOString(),
+    customers: state.customers,
+    employees: state.employees
+  };
+  const blob=new Blob([JSON.stringify(backup,null,2)],{type:'application/json'});
   const url=URL.createObjectURL(blob);
   const a=document.createElement('a');a.href=url;a.download=`DueMaster_Backup_${new Date().toISOString().slice(0,10)}.json`;a.click();
   URL.revokeObjectURL(url);
-  showToast('✅ JSON backup downloaded!');
+  showToast(`✅ JSON backup downloaded! (${state.customers.length} records, ${state.employees.length} employees)`);
 }
 
 function handleRestoreJSON(file) {
   const reader=new FileReader();
   reader.onload=e=>{
     try{
-      const data=JSON.parse(e.target.result);
-      if(!Array.isArray(data)){showToast('Invalid backup file','error');return;}
-      state.restorePreview={records:data,source:'JSON',fileName:file.name,collectionCount:data.reduce((s,r)=>s+(r.collections||[]).length,0)};
+      const raw=JSON.parse(e.target.result);
+      // Support both old format (plain array) and new format (object with customers+employees)
+      let data, employees=[];
+      if(Array.isArray(raw)){
+        data=raw; // old format
+      } else if(raw && Array.isArray(raw.customers)){
+        data=raw.customers; // new format
+        employees=Array.isArray(raw.employees)?raw.employees:[];
+      } else {
+        showToast('Invalid backup file','error'); return;
+      }
+      state.restorePreview={
+        records: data,
+        employees: employees,
+        source:'JSON',
+        fileName: file.name,
+        collectionCount: data.reduce((s,r)=>s+(r.collections||[]).length,0)
+      };
       render();
     }catch{showToast('Could not read JSON file','error');}
   };
@@ -521,11 +574,13 @@ function handleRestoreExcel(file) {
         const reminderDate=parseExcelDate(row['Reminder Date']||'');
         const reminderNote=String(row['Reminder Note']||'').trim();
         const paid=String(row['Status']||'').toLowerCase()==='paid';
+        const priority=String(row['Priority']||'').toLowerCase()==='yes';
+        const assignedEmp=String(row['Assigned Employee']||'').trim();
         const createdAt=row['Created']?new Date(row['Created']).toISOString():new Date().toISOString();
         if(!name||!amount||!dueDate) return null;
         let collections=[];
         if(collectedAmt>0&&collectionRows.length===0) collections=[{id:genId(),amount:collectedAmt,date:dueDate,mode:'Restored',note:'Imported from Excel backup',at:createdAt}];
-        return {id:genId(),name,refNo,phone,email,notes,amount,dueDate,reminderDate,reminderNote,paid,collections,reminders:[],createdAt};
+        return {id:genId(),name,refNo,phone,email,notes,amount,dueDate,reminderDate,reminderNote,paid,priority,assignedEmp,collections,reminders:[],createdAt};
       }).filter(Boolean);
       if(collectionRows.length>0){
         const collMap={};
@@ -555,9 +610,18 @@ function confirmRestore(mode) {
   if(!state.restorePreview) return;
   if(mode==='replace'){
     state.customers=state.restorePreview.records;
+    // Restore employees if present in backup
+    if(state.restorePreview.employees && state.restorePreview.employees.length){
+      state.employees=state.restorePreview.employees;
+    }
     showToast(`✅ Replaced with ${state.restorePreview.records.length} records!`);
   } else {
     state.customers=[...state.customers,...state.restorePreview.records];
+    // Merge employees without duplicates
+    if(state.restorePreview.employees && state.restorePreview.employees.length){
+      const merged=[...new Set([...state.employees,...state.restorePreview.employees])];
+      state.employees=merged;
+    }
     showToast(`✅ Added ${state.restorePreview.records.length} records!`);
   }
   state.restorePreview=null; saveData(); render();
