@@ -769,7 +769,7 @@ function render() {
     <div style="display:flex;gap:6px;margin-bottom:11px;flex-wrap:wrap">
       <div style="flex:1;min-width:160px;position:relative">
         <span style="position:absolute;left:9px;top:50%;transform:translateY(-50%);color:#94a3b8">${IC.srch}</span>
-        <input class="inp" value="${state.search.replace(/"/g,'&quot;')}" oninput="state.search=this.value;render()" placeholder="Search…" style="padding-left:30px"/>
+        <input class="inp" id="searchInp" value="${state.search.replace(/"/g,'&quot;')}" oninput="handleSearch(this.value)" placeholder="Search…" style="padding-left:30px"/>
       </div>
       ${['all','overdue','today','upcoming','remind','paid','unpaid'].map(f=>`
         <button onclick="state.filter='${f}';render()" style="padding:6px 10px;background:${state.filter===f?A:'#fff'};color:${state.filter===f?'#fff':'#475569'};border:1.5px solid ${state.filter===f?A:'#e2e8f0'};border-radius:6px;font-size:10px;font-weight:600;cursor:pointer;white-space:nowrap">
@@ -1501,9 +1501,32 @@ function render() {
   }
 
   document.getElementById('app').innerHTML = html;
+
+  // Restore focus to search input if it was active
+  if (state.tab === 'Customers' && state.search !== '') {
+    const srch = document.querySelector('input[placeholder="Search…"]');
+    if (srch) {
+      srch.focus();
+      const len = srch.value.length;
+      srch.setSelectionRange(len, len);
+    }
+  }
 }
 
 // ── GLOBAL ACTION HELPERS ────────────────────────────────────────────────────
+function handleSearch(val) {
+  state.search = val;
+  // Re-render customer list only, not full page
+  render();
+  // Immediately restore focus and cursor to end
+  const srch = document.getElementById('searchInp');
+  if (srch) {
+    srch.focus();
+    const len = srch.value.length;
+    srch.setSelectionRange(len, len);
+  }
+}
+
 function openCollect(id) { state.collectCust=state.customers.find(c=>c.id===id)||null; render(); }
 function openRemDate(id) { state.remDateCust=state.customers.find(c=>c.id===id)||null; render(); }
 function openSendRem(id) { state.sendRemCust=state.customers.find(c=>c.id===id)||null; render(); }
