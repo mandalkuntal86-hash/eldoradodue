@@ -53,7 +53,7 @@ const STORAGE_KEY = 'due_master_v2';
 // Backup tab and paste it below. Then re-upload to GitHub.
 // Every device will then auto-connect without any manual steps.
 // Example: 'https://your-project-default-rtdb.firebaseio.com'
-const HARDCODED_DB_URL = 'https://duemaster-bf3b5-default-rtdb.firebaseio.com';
+const HARDCODED_DB_URL = '';
 
 // ── STATE ────────────────────────────────────────────────────────────────────
 let state = {
@@ -64,12 +64,19 @@ let state = {
   filter: 'all',
   editId: null,
   collectCust: null,
+  amtEditCust: null,
+  amtEditPwdOk: false,
+  amtEditPwdInput: '',
   remDateCust: null,
   sendRemCust: null,
   confirmDel: null,
   showClearConfirm: false,
   clearPhase: 1,
   clearInput: '',
+  showPwdSetup: false,
+  pwdInput: '',
+  pwdNew: '',
+  pwdNew2: '',
   restorePreview: null,
   bulkImport: { stage: 'upload', preview: null, mapping: {}, result: null, drag: false },
   restoreDrag: false,
@@ -163,18 +170,19 @@ function initFirebase(cfg) {
 function startListener() {
   if (!fbRef || !fbDb) return;
 
-  // Listen for CLEAR signal — any device that clears will broadcast to all others
+  // Listen for CLEAR signal
   fbDb.ref('duemaster_cleared').on('value', snap => {
-    if (!snap.val()) return; // null = signal removed, ignore
-    if (fbClearing) return;  // we triggered this clear ourselves, ignore
-    // Another device cleared — clear this device too
+    if (!snap.val()) return;
+    if (fbClearing) return;
     state.customers = [];
+    state.employees = [];
     try { localStorage.removeItem(STORAGE_KEY); } catch{}
+    try { localStorage.removeItem(STORAGE_KEY+'_emp'); } catch{}
     render();
     updateSyncStatus('🗑️ Cleared by another device', '#f59e0b');
   });
 
-  // Listen for data changes
+  // Listen for customer data changes
   fbListener = fbRef.on('value', snap => {
     if (fbIgnoreNext) { fbIgnoreNext = false; return; }
     if (fbClearing) return;
@@ -193,19 +201,44 @@ function startListener() {
   }, err => {
     updateSyncStatus('❌ Sync error — check Firebase rules', '#ef4444');
   });
+
+  // Listen for employee changes
+  fbDb.ref('duemaster_employees').on('value', snap => {
+    if (fbClearing) return;
+    const raw = snap.val();
+    if (raw === null || raw === undefined) return;
+    const emps = Array.isArray(raw) ? raw.filter(Boolean) : Object.values(raw).filter(Boolean);
+    state.employees = emps;
+    try { localStorage.setItem(STORAGE_KEY+'_emp', JSON.stringify(emps)); } catch{}
+    render();
+  });
 }
 
 function pushToFirebase() {
-  if (!fbRef) return;
+  if (!fbRef || !fbDb) return;
   fbIgnoreNext = true;
   const dataToStore = state.customers.length > 0 ? state.customers : null;
   fbRef.set(dataToStore)
+    .then(() => {
+      // Also push employees
+      const empData = state.employees.length > 0 ? state.employees : null;
+      return fbDb.ref('duemaster_employees').set(empData);
+    })
     .then(() => updateSyncStatus('✅ Synced', '#16a34a'))
     .catch(e => { fbIgnoreNext = false; updateSyncStatus('❌ Sync failed', '#ef4444'); });
 }
 
+function pushEmployeesToFirebase() {
+  if (!fbDb) return;
+  const empData = state.employees.length > 0 ? state.employees : null;
+  fbDb.ref('duemaster_employees').set(empData).catch(()=>{});
+}
+
 function disconnectFirebase() {
-  if (fbDb) { try { fbDb.ref('duemaster_cleared').off(); } catch{} }
+  if (fbDb) {
+    try { fbDb.ref('duemaster_cleared').off(); } catch{}
+    try { fbDb.ref('duemaster_employees').off(); } catch{}
+  }
   if (fbRef && fbListener) { fbRef.off('value', fbListener); fbListener = null; }
   if (fbApp) { try { fbApp.delete(); } catch{} fbApp=null; fbDb=null; fbRef=null; }
   state.fbConnected = false;
@@ -229,6 +262,7 @@ function saveLocal() {
 function saveData() {
   saveLocal();
   if (fbRef) pushToFirebase();
+  else if (fbDb) pushEmployeesToFirebase();
 }
 
 function loadData() {
@@ -370,6 +404,34 @@ const IC = {
 // ── HANDLERS ─────────────────────────────────────────────────────────────────
 function setTab(t) { state.tab=t; if(t!=='Add Due'){state.editId=null;resetForm();} render(); }
 function resetForm() { state.form={name:'',phone:'',email:'',refNo:'',amount:'',dueDate:'',reminderDate:'',reminderNote:'',notes:'',priority:false,assignedEmp:''}; }
+
+// ── PASSWORD HELPERS ─────────────────────────────────────────────────────────
+function getClearPassword() {
+  try { return localStorage.getItem('dm_clear_pwd') || 'CLEAR'; } catch { return 'CLEAR'; }
+}
+function setClearPassword(pwd) {
+  try { localStorage.setItem('dm_clear_pwd', pwd); } catch {}
+}
+function getAmtEditPassword() {
+  try { return localStorage.getItem('dm_amt_pwd') || ''; } catch { return ''; }
+}
+function setAmtEditPassword(pwd) {
+  try { localStorage.setItem('dm_amt_pwd', pwd); } catch {}
+}
+
+// ── AMOUNT EDIT ──────────────────────────────────────────────────────────────
+function openAmtEdit(id) {
+  const c = state.customers.find(x=>x.id===id);
+  if(c) { state.amtEditCust = {...c, newAmount: c.amount }; state.amtEditPwdOk = true; render(); }
+}
+function saveAmtEdit() {
+  const c = state.amtEditCust;
+  const newAmt = parseFloat(c.newAmount);
+  if(!newAmt || newAmt <= 0) { showToast('Enter a valid amount','error'); return; }
+  state.customers = state.customers.map(x => x.id===c.id ? {...x, amount: newAmt} : x);
+  state.amtEditCust = null;
+  saveData(); showToast('✅ Amount updated!'); render();
+}
 
 function togglePriority(id) {
   state.customers=state.customers.map(c=>c.id===id?{...c,priority:!c.priority}:c);
@@ -652,6 +714,7 @@ function handleClear() {
   // 4. Restart listener after 2s
   fbDb.ref('duemaster_cleared').set(true)
     .then(() => fbRef.set(null))
+    .then(() => fbDb.ref('duemaster_employees').set(null))
     .then(() => {
       updateSyncStatus('🗑️ Cleared on all devices', '#f59e0b');
       render();
@@ -860,7 +923,13 @@ function render() {
           ${pct>0&&pct<100?`<div style="margin-top:5px"><div style="display:flex;justify-content:space-between;font-size:9px;color:#64748b;margin-bottom:2px"><span>Collected: ${fc(collected)}</span><span>${pct}%</span></div><div style="background:#e2e8f0;border-radius:4px;height:4px"><div style="background:#16a34a;border-radius:4px;height:4px;width:${pct}%;transition:width .3s"></div></div></div>`:''}
           ${c.reminderDate&&rs?`<div style="margin-top:4px;display:flex;align-items:center;gap:4px;font-size:10px"><span style="color:${rs.color}">${IC.cal}</span><span style="color:${rs.color};font-weight:600">Reminder: ${fd(c.reminderDate)}</span>${c.reminderNote?`<span style="color:#94a3b8">· ${c.reminderNote}</span>`:''}</div>`:''}
         </div>
-        <div style="min-width:85px;text-align:right"><div style="font-weight:800;font-size:13px;color:#0f172a">${fc(balance)}</div><div style="font-size:9px;color:#94a3b8">Due ${fd(c.dueDate)}</div></div>
+        <div style="min-width:85px;text-align:right">
+          <div style="display:flex;align-items:center;justify-content:flex-end;gap:4px">
+            <span style="font-weight:800;font-size:13px;color:#0f172a">${fc(balance)}</span>
+            <button class="ab" onclick='openAmtEdit(${JSON.stringify(c.id)})' title="Edit Amount" style="padding:2px 5px;background:#f0f9ff;color:#2563eb;border:none;border-radius:4px;cursor:pointer;font-size:10px">✏️</button>
+          </div>
+          <div style="font-size:9px;color:#94a3b8">Due ${fd(c.dueDate)}</div>
+        </div>
         <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">
           ${tag(st.label,st.badge,'#fff')}
           ${rs&&!c.paid?tag(rs.label,rs.bg,rs.color):''}
@@ -1323,7 +1392,11 @@ function render() {
       </div>
       <div style="background:#fff;border-radius:12px;padding:18px 20px;border:1.5px solid #fecaca;box-shadow:0 2px 8px rgba(0,0,0,0.06)">
         <div style="font-size:13px;font-weight:700;color:#991b1b;margin-bottom:4px;display:flex;align-items:center;gap:6px">${IC.trash} Clear All Data</div>
-        <p style="margin:0 0 14px;color:#64748b;font-size:11px">Permanently delete all ${state.customers.length} records, collections and reminders. <strong style="color:#ef4444">This cannot be undone.</strong> Download a backup first!</p>
+        <p style="margin:0 0 10px;color:#64748b;font-size:11px">Permanently delete all ${state.customers.length} records, collections and reminders. <strong style="color:#ef4444">This cannot be undone.</strong> Download a backup first!</p>
+        <div style="background:#fef2f2;border-radius:8px;padding:8px 12px;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+          <div style="font-size:11px;color:#7f1d1d">🔐 Clear password: <strong>${getClearPassword()==='CLEAR'?'Default (CLEAR)':'Custom password set ✅'}</strong></div>
+          <button onclick="state.showPwdSetup=true;state.pwdInput='';state.pwdNew='';state.pwdNew2='';render()" style="padding:5px 12px;background:#fff;color:#7c3aed;border:1.5px solid #ddd6fe;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer">🔑 Change Password</button>
+        </div>
         <button onclick="state.showClearConfirm=true;state.clearPhase=1;state.clearInput='';render()" ${!state.customers.length?'disabled':''} style="padding:10px 18px;background:${!state.customers.length?'#f1f5f9':'#fff1f2'};color:${!state.customers.length?'#94a3b8':'#ef4444'};border:1.5px solid ${!state.customers.length?'#e2e8f0':'#fca5a5'};border-radius:8px;font-size:12px;font-weight:700;cursor:${!state.customers.length?'not-allowed':'pointer'};display:inline-flex;align-items:center;gap:6px">${IC.trash} ${!state.customers.length?'No Data to Clear':'Clear All Data'}</button>
       </div>
     </div>`;
@@ -1422,6 +1495,136 @@ function render() {
   }
 
   // Firebase Setup Modal
+  // ── AMOUNT EDIT MODAL ──
+  if(state.amtEditCust){
+    const ac = state.amtEditCust;
+    const {collected} = collectBalance(ac);
+    html+=`<div class="modal-overlay" onclick="if(event.target===this){state.amtEditCust=null;state.amtEditPwdOk=false;render()}">
+      <div class="modal-box" style="max-width:360px">
+        <div class="modal-header">
+          <h3 style="margin:0;font-size:15px;font-weight:700;color:#0f172a;font-family:'Playfair Display',serif">✏️ Edit Due Amount</h3>
+          <button onclick="state.amtEditCust=null;state.amtEditPwdOk=false;render()" style="background:none;border:none;cursor:pointer;color:#64748b">${IC.X}</button>
+        </div>
+        <div class="modal-body">`;
+
+    if(!state.amtEditPwdOk){
+      // ── Password gate ──
+      html+=`
+          <div style="text-align:center;margin-bottom:14px">
+            <div style="font-size:36px;margin-bottom:6px">🔐</div>
+            <div style="font-size:13px;font-weight:700;color:#0f172a">Password Required</div>
+            <div style="font-size:11px;color:#64748b;margin-top:3px">Enter password to edit due amount for <strong>${ac.name}</strong></div>
+          </div>
+          <div class="field-wrap">
+            <label class="field-label">Amount Edit Password</label>
+            <input class="inp" id="amtPwdInp" type="password"
+              placeholder="Enter password…" style="text-align:center;font-size:16px;font-weight:700;letter-spacing:.1em"
+              onkeydown="if(event.key==='Enter'){const v=this.value;const p=getAmtEditPassword();if(v===p){state.amtEditPwdOk=true;render();}else{showToast('Wrong password ❌','error');this.value='';this.focus();}}"/>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:4px">
+            <button onclick="const v=document.getElementById('amtPwdInp').value;const p=getAmtEditPassword();if(v===p){state.amtEditPwdOk=true;render();}else{showToast('Wrong password ❌','error');document.getElementById('amtPwdInp').value='';document.getElementById('amtPwdInp').focus();}" style="flex:1;padding:11px;background:linear-gradient(135deg,#1d4ed8,#2563eb);color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">🔓 Unlock</button>
+            <button onclick="state.amtEditCust=null;state.amtEditPwdOk=false;render()" class="btn-cancel">Cancel</button>
+          </div>`;
+    } else {
+      // ── Edit form (after password verified) ──
+      html+=`
+          <div style="background:#f0f9ff;border-radius:9px;padding:12px 14px;margin-bottom:16px">
+            <div style="font-size:13px;font-weight:700;color:#0f172a">${ac.name}</div>
+            <div style="font-size:11px;color:#64748b;margin-top:2px">${ac.refNo||'No Ref'}</div>
+            <div style="display:flex;gap:16px;margin-top:8px">
+              <div><div style="font-size:10px;color:#64748b">Current Amount</div><div style="font-size:14px;font-weight:800;color:#0f172a">${fc(ac.amount)}</div></div>
+              <div><div style="font-size:10px;color:#64748b">Collected</div><div style="font-size:14px;font-weight:800;color:#16a34a">${fc(collected)}</div></div>
+              <div><div style="font-size:10px;color:#64748b">Balance</div><div style="font-size:14px;font-weight:800;color:#ef4444">${fc(ac.amount - collected)}</div></div>
+            </div>
+          </div>
+          <div class="field-wrap">
+            <label class="field-label">New Due Amount (₹) <span style="color:#ef4444">*</span></label>
+            <input class="inp" id="amtEditInp" type="number" value="${ac.newAmount||ac.amount}" oninput="state.amtEditCust.newAmount=this.value" placeholder="Enter new amount" style="font-size:18px;font-weight:700;text-align:center"/>
+          </div>
+          ${ac.newAmount && parseFloat(ac.newAmount) < collected ? `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:7px;padding:8px 12px;font-size:11px;color:#ef4444;margin-bottom:10px">⚠️ Amount less than already collected (${fc(collected)}). Customer will be marked as overpaid.</div>` : ''}
+          <div style="display:flex;gap:8px;margin-top:4px">
+            <button onclick="saveAmtEdit()" style="flex:1;padding:11px;background:linear-gradient(135deg,#1d4ed8,#2563eb);color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">✅ Save Amount</button>
+            <button onclick="state.amtEditCust=null;state.amtEditPwdOk=false;render()" class="btn-cancel">Cancel</button>
+          </div>`;
+    }
+
+    html+=`</div></div></div>`;
+  }
+
+  // ── PASSWORD SETUP MODAL ──
+  if(state.showPwdSetup){
+    html+=`<div class="modal-overlay" onclick="if(event.target===this){state.showPwdSetup=false;render()}">
+      <div class="modal-box" style="max-width:400px">
+        <div class="modal-header">
+          <h3 style="margin:0;font-size:15px;font-weight:700;color:#0f172a;font-family:'Playfair Display',serif">🔑 Password Settings</h3>
+          <button onclick="state.showPwdSetup=false;render()" style="background:none;border:none;cursor:pointer;color:#64748b">${IC.X}</button>
+        </div>
+        <div class="modal-body">
+
+          <!-- ── CLEAR PASSWORD ── -->
+          <div style="background:#fef2f2;border-radius:10px;padding:14px 16px;margin-bottom:16px;border:1px solid #fecaca">
+            <div style="font-size:12px;font-weight:700;color:#991b1b;margin-bottom:10px">🗑️ Clear All Data Password</div>
+            <div style="font-size:10px;color:#64748b;margin-bottom:10px">Required to delete all data. Default: <strong>CLEAR</strong></div>
+            <div class="field-wrap">
+              <label class="field-label">Current Password</label>
+              <input class="inp" type="password" value="${state.pwdInput}" oninput="state.pwdInput=this.value" placeholder="Current password"/>
+            </div>
+            <div class="field-wrap">
+              <label class="field-label">New Password</label>
+              <input class="inp" type="password" value="${state.pwdNew}" oninput="state.pwdNew=this.value" placeholder="Min 4 characters"/>
+            </div>
+            <div class="field-wrap" style="margin-bottom:8px">
+              <label class="field-label">Confirm New Password</label>
+              <input class="inp" type="password" value="${state.pwdNew2}" oninput="state.pwdNew2=this.value" placeholder="Repeat password"
+                style="border-color:${state.pwdNew2&&state.pwdNew!==state.pwdNew2?'#ef4444':'#e2e8f0'}"/>
+            </div>
+            ${state.pwdNew2&&state.pwdNew!==state.pwdNew2?`<div style="color:#ef4444;font-size:10px;margin-bottom:8px">❌ Passwords do not match</div>`:''}
+            <button onclick="(()=>{
+              if(state.pwdInput!==getClearPassword()){showToast('Current clear password is wrong','error');return;}
+              if(!state.pwdNew||state.pwdNew.length<4){showToast('Min 4 characters required','error');return;}
+              if(state.pwdNew!==state.pwdNew2){showToast('Passwords do not match','error');return;}
+              setClearPassword(state.pwdNew);
+              state.pwdInput='';state.pwdNew='';state.pwdNew2='';
+              showToast('✅ Clear password changed!'); render();
+            })()" style="width:100%;padding:9px;background:linear-gradient(135deg,#ef4444,#dc2626);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer">Save Clear Password</button>
+          </div>
+
+          <!-- ── AMOUNT EDIT PASSWORD ── -->
+          <div style="background:#eff6ff;border-radius:10px;padding:14px 16px;margin-bottom:16px;border:1px solid #bfdbfe">
+            <div style="font-size:12px;font-weight:700;color:#1d4ed8;margin-bottom:6px">✏️ Edit Due Amount Password</div>
+            <div style="font-size:10px;color:#64748b;margin-bottom:10px">
+              Required to edit a customer's due amount. 
+              ${getAmtEditPassword()===''?'<span style="color:#16a34a;font-weight:700">Currently: No password (anyone can edit)</span>':'<span style="color:#2563eb;font-weight:700">✅ Password is set</span>'}
+            </div>
+            <div class="field-wrap">
+              <label class="field-label">New Amount Edit Password</label>
+              <input class="inp" id="amtPwdNew" type="password" placeholder="Set new password (min 4 chars)" oninput="state._amtPwdNew=this.value"/>
+            </div>
+            <div class="field-wrap" style="margin-bottom:8px">
+              <label class="field-label">Confirm Password</label>
+              <input class="inp" id="amtPwdNew2" type="password" placeholder="Repeat password" oninput="state._amtPwdNew2=this.value"/>
+            </div>
+            <div style="display:flex;gap:6px">
+              <button onclick="(()=>{
+                const p1=document.getElementById('amtPwdNew').value;
+                const p2=document.getElementById('amtPwdNew2').value;
+                if(!p1||p1.length<4){showToast('Min 4 characters required','error');return;}
+                if(p1!==p2){showToast('Passwords do not match','error');return;}
+                setAmtEditPassword(p1);
+                showToast('✅ Amount edit password set!'); render();
+              })()" style="flex:1;padding:9px;background:linear-gradient(135deg,#2563eb,#1d4ed8);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer">Set Password</button>
+              ${getAmtEditPassword()!==''?`<button onclick="if(confirm('Remove amount edit password? Anyone can edit amounts.')){setAmtEditPassword('');showToast('Password removed','info');render();}" style="padding:9px 14px;background:#fff;color:#ef4444;border:1.5px solid #fecaca;border-radius:8px;font-size:11px;font-weight:700;cursor:pointer">Remove</button>`:''}
+            </div>
+          </div>
+
+          <div style="padding:10px 12px;background:#fef3c7;border-radius:8px;font-size:10px;color:#92400e">
+            ⚠️ <strong>Note:</strong> Passwords are stored on this device only. Write them down safely.
+          </div>
+          <button onclick="state.showPwdSetup=false;render()" style="margin-top:12px;width:100%;padding:10px;background:#f1f5f9;color:#475569;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">Close</button>
+        </div>
+      </div></div>`;
+  }
+
   if(state.showEmpMgr){
     html+=`<div class="modal-overlay" onclick="if(event.target===this){state.showEmpMgr=false;render()}">
       <div class="modal-box" style="max-width:400px">
@@ -1433,8 +1636,8 @@ function render() {
           <p style="margin:0 0 14px;font-size:11px;color:#64748b">Add employees here. You can then assign them to customers when adding or editing a record.</p>
           <div style="display:flex;gap:8px;margin-bottom:16px">
             <input id="empInp" class="inp" value="${state.empInput.replace(/"/g,'&quot;')}" oninput="state.empInput=this.value" placeholder="Employee name…" style="flex:1"
-              onkeydown="if(event.key==='Enter'){const n=state.empInput.trim();if(n&&!state.employees.includes(n)){state.employees.push(n);state.empInput='';saveLocal();render();}}"/>
-            <button onclick="const n=state.empInput.trim();if(n&&!state.employees.includes(n)){state.employees.push(n);state.empInput='';saveLocal();render();}else if(state.employees.includes(n)){showToast('Employee already exists','info');}" style="padding:9px 16px;background:linear-gradient(135deg,#7c3aed,#6d28d9);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer">+ Add</button>
+              onkeydown="if(event.key==='Enter'){const n=state.empInput.trim();if(n&&!state.employees.includes(n)){state.employees.push(n);state.empInput='';saveData();render();}}"/>
+            <button onclick="const n=state.empInput.trim();if(n&&!state.employees.includes(n)){state.employees.push(n);state.empInput='';saveData();render();}else if(state.employees.includes(n)){showToast('Employee already exists','info');}" style="padding:9px 16px;background:linear-gradient(135deg,#7c3aed,#6d28d9);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer">+ Add</button>
           </div>
           ${state.employees.length===0?`<div style="text-align:center;padding:20px;color:#94a3b8;font-size:12px">No employees added yet</div>`:`
           <div style="max-height:280px;overflow-y:auto">
@@ -1513,6 +1716,7 @@ function render() {
 
   // Clear Confirm Modal
   if(state.showClearConfirm){
+    const clearPwd = getClearPassword();
     html+=`<div class="modal-overlay">
       <div class="modal-box" style="max-width:380px">
         <div class="modal-body">`;
@@ -1529,12 +1733,12 @@ function render() {
         </div>`;
     } else {
       html+=`<div style="font-size:36px;text-align:center;margin-bottom:10px">🔐</div>
-        <h3 style="margin:0 0 8px;font-size:15px;font-weight:800;color:#991b1b;text-align:center">Final Confirmation</h3>
-        <p style="margin:0 0 12px;color:#64748b;font-size:12px;text-align:center">Type <strong>CLEAR</strong> below to confirm:</p>
-        <input class="inp" id="clearInput" value="${state.clearInput}" oninput="state.clearInput=this.value.toUpperCase();this.value=state.clearInput;updateClearBtn()" placeholder="Type CLEAR here" maxlength="5" style="text-align:center;font-size:16px;font-weight:700;letter-spacing:.15em;margin-bottom:12px;border-color:${state.clearInput==='CLEAR'?'#ef4444':'#e2e8f0'}"/>
+        <h3 style="margin:0 0 8px;font-size:15px;font-weight:800;color:#991b1b;text-align:center">Enter Password to Confirm</h3>
+        <p style="margin:0 0 12px;color:#64748b;font-size:12px;text-align:center">Type your clear password to permanently delete all data:</p>
+        <input class="inp" id="clearInput" type="password" value="${state.clearInput}" oninput="state.clearInput=this.value;updateClearBtn()" placeholder="Enter password…" style="text-align:center;font-size:16px;font-weight:700;letter-spacing:.15em;margin-bottom:12px;border-color:${state.clearInput===clearPwd?'#ef4444':'#e2e8f0'}"/>
         <div style="display:flex;gap:8px">
-          <button id="clearBtn" onclick="if(state.clearInput==='CLEAR')handleClear()" ${state.clearInput!=='CLEAR'?'disabled':''} style="flex:1;padding:10px;background:${state.clearInput==='CLEAR'?'#ef4444':'#fca5a5'};color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:${state.clearInput==='CLEAR'?'pointer':'not-allowed'}">🗑️ Delete Everything</button>
-          <button onclick="state.showClearConfirm=false;render()" style="flex:1;padding:10px;background:#f1f5f9;color:#475569;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">Cancel</button>
+          <button id="clearBtn" onclick="if(state.clearInput===getClearPassword())handleClear()" ${state.clearInput!==clearPwd?'disabled':''} style="flex:1;padding:10px;background:${state.clearInput===clearPwd?'#ef4444':'#fca5a5'};color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:${state.clearInput===clearPwd?'pointer':'not-allowed'}">🗑️ Delete Everything</button>
+          <button onclick="state.showClearConfirm=false;state.clearInput='';render()" style="flex:1;padding:10px;background:#f1f5f9;color:#475569;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">Cancel</button>
         </div>`;
     }
     html+=`</div></div></div>`;
@@ -1646,7 +1850,7 @@ function connectFirebase() {
 }
 
 function updateClearBtn() {
-  const ok = state.clearInput === 'CLEAR';
+  const ok = state.clearInput === getClearPassword();
   const btn = document.getElementById('clearBtn');
   const inp = document.getElementById('clearInput');
   if (btn) {
