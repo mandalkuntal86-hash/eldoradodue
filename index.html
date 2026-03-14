@@ -53,7 +53,7 @@ const STORAGE_KEY = 'due_master_v2';
 // Backup tab and paste it below. Then re-upload to GitHub.
 // Every device will then auto-connect without any manual steps.
 // Example: 'https://your-project-default-rtdb.firebaseio.com'
-const HARDCODED_DB_URL = '';
+const HARDCODED_DB_URL = 'https://duemaster-bf3b5-default-rtdb.firebaseio.com';
 
 // ── STATE ────────────────────────────────────────────────────────────────────
 let state = {
@@ -944,6 +944,7 @@ function render() {
         </div>
         <div style="display:flex;gap:4px;flex-shrink:0;flex-wrap:wrap">
           <button class="ab" onclick='togglePriority(${JSON.stringify(c.id)})' title="${c.priority?'Remove Priority':'Mark Priority'}" style="padding:5px 7px;background:${c.priority?'#fef3c7':'#f8fafc'};color:${c.priority?'#d97706':'#94a3b8'};border:none;border-radius:6px;cursor:pointer;font-size:13px">⭐</button>
+          ${c.phone?`<a href="tel:${c.phone}" class="ab" title="Call ${c.name}" style="padding:5px 7px;background:#f0fdf4;color:#16a34a;border:none;border-radius:6px;cursor:pointer;display:flex;align-items:center;text-decoration:none">📞</a>`:''}
           ${!c.paid?`
             <button class="ab" onclick='openCollect(${JSON.stringify(c.id)})' title="Record Collection" style="padding:5px 7px;background:#f0fdf4;color:#16a34a;border:none;border-radius:6px;cursor:pointer;display:flex;align-items:center">${IC.collect}</button>
             <button class="ab" onclick='openRemDate(${JSON.stringify(c.id)})' title="Set Reminder" style="padding:5px 7px;background:#faf5ff;color:#7c3aed;border:none;border-radius:6px;cursor:pointer;display:flex;align-items:center">${IC.cal}</button>
@@ -1024,6 +1025,7 @@ function render() {
             <div style="display:flex;flex-direction:column;gap:4px">${tag(st.label,st.badge,'#fff')}</div>
             <div style="display:flex;gap:4px;flex-shrink:0;flex-wrap:wrap">
               <button class="ab" onclick='togglePriority(${JSON.stringify(c.id)})' title="Remove Priority" style="padding:5px 7px;background:#fef3c7;color:#d97706;border:none;border-radius:6px;cursor:pointer;font-size:13px">⭐</button>
+              ${c.phone?`<a href="tel:${c.phone}" class="ab" title="Call ${c.name}" style="padding:5px 7px;background:#f0fdf4;color:#16a34a;border:none;border-radius:6px;cursor:pointer;display:flex;align-items:center;text-decoration:none">📞</a>`:''}
               ${!c.paid?`
                 <button class="ab" onclick='openCollect(${JSON.stringify(c.id)})' title="Collect" style="padding:5px 7px;background:#f0fdf4;color:#16a34a;border:none;border-radius:6px;cursor:pointer;display:flex;align-items:center">${IC.collect}</button>
                 <button class="ab" onclick='openSendRem(${JSON.stringify(c.id)})' title="Send Reminder" style="padding:5px 7px;background:#eff6ff;color:${A};border:none;border-radius:6px;cursor:pointer;display:flex;align-items:center">${IC.bell}</button>`:''}
