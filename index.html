@@ -500,6 +500,28 @@ function handleBulkImport(records) {
   saveData(); showToast(`✅ Imported ${records.length} records!`); render();
 }
 
+function handleDayExport(dayKey) {
+  if(!dayKey){showToast('No date selected','info');return;}
+  const rows=[];
+  state.customers.forEach(c=>{
+    (c.collections||[]).forEach(x=>{
+      if(x.date!==dayKey) return;
+      rows.push({'Customer Name':c.name,'Ref No.':c.refNo||'','Phone':c.phone||'','Amount Collected':x.amount,'Payment Mode':x.mode,'Note':x.note||'','Total Due':c.amount,'Status':c.paid?'Paid':'Unpaid'});
+    });
+  });
+  if(!rows.length){showToast('No collections on this date','info');return;}
+  const dateLabel=new Date(dayKey).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'});
+  const total=rows.reduce((s,r)=>s+r['Amount Collected'],0);
+  rows.push({});
+  rows.push({'Customer Name':'TOTAL','Amount Collected':total});
+  const ws=XLSX.utils.json_to_sheet(rows);
+  ws['!cols']=[22,14,13,16,14,20,12,10].map(w=>({wch:w}));
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,dateLabel.slice(0,31));
+  XLSX.writeFile(wb,`Collection_${dayKey}.xlsx`);
+  showToast(`✅ ${dateLabel} report downloaded! (${rows.length-2} entries)`);
+}
+
 function handleMonthExport(monthKey) {
   if(!monthKey){showToast('No month selected','info');return;}
   const rows=[];
@@ -1164,6 +1186,26 @@ function render() {
     if(!state.selectedMonth && monthList.length>0) state.selectedMonth = monthList[0].key;
     const selMonthData = monthMap[selectedMonth];
 
+    // ── Build day-wise data ──
+    const dayMap = {};
+    state.customers.forEach(c=>{
+      (c.collections||[]).forEach(x=>{
+        if(!x.date) return;
+        const key = x.date; // YYYY-MM-DD
+        const d = new Date(x.date);
+        const label = d.toLocaleDateString('en-IN',{weekday:'short',day:'2-digit',month:'short',year:'numeric'});
+        if(!dayMap[key]) dayMap[key]={key,label,total:0,count:0,entries:[]};
+        dayMap[key].total += x.amount;
+        dayMap[key].count++;
+        dayMap[key].entries.push({...x, custName:c.name, refNo:c.refNo||''});
+      });
+    });
+    const dayList = Object.values(dayMap).sort((a,b)=>b.key.localeCompare(a.key));
+    const todayKey = new Date().toISOString().split('T')[0];
+    const todayData = dayMap[todayKey];
+    if(!state.selectedDay) state.selectedDay = dayList.length>0 ? dayList[0].key : todayKey;
+    const selDayData = dayMap[state.selectedDay];
+
     html+=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
       <h2 style="margin:0;font-size:19px;font-weight:800;color:#0f172a;font-family:'Playfair Display',serif">💰 Collection Report</h2>
     </div>
@@ -1171,7 +1213,75 @@ function render() {
       ${statCard('Total Collected',fc(totalCollected),'#16a34a','All time',IC.collect)}
       ${statCard('Balance Pending',fc(totalPending),'#ef4444',unpaid.length+' unpaid',IC.warn)}
       ${statCard('Fully Paid',state.customers.filter(c=>c.paid).length,'#2563eb','Customers',IC.chk)}
-      ${statCard('This Month',fc(monthList.length>0&&monthMap[new Date().getFullYear()+'-'+(new Date().getMonth()+1).toString().padStart(2,'0')]?monthMap[new Date().getFullYear()+'-'+(new Date().getMonth()+1).toString().padStart(2,'0')].total:0),'#7c3aed',new Date().toLocaleDateString('en-IN',{month:'short',year:'numeric'}),IC.cal)}
+      ${statCard('Today',fc(todayData?todayData.total:0),'#f59e0b',todayData?(todayData.count+' payments'):'No collections',IC.cal)}
+    </div>
+
+    <!-- Day-wise Section -->
+    <div style="background:#fff;border-radius:12px;padding:16px 18px;margin-bottom:18px;box-shadow:0 2px 8px rgba(0,0,0,0.06)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+        <h3 style="margin:0;font-size:13px;font-weight:700;color:#0f172a">📆 Day-wise Collection</h3>
+        <div style="display:flex;align-items:center;gap:8px">
+          <input type="date" value="${state.selectedDay||todayKey}" onchange="state.selectedDay=this.value;render()" style="padding:6px 10px;border:1.5px solid #e2e8f0;border-radius:7px;font-size:12px;font-weight:600;color:#0f172a;background:#f8fafc;cursor:pointer"/>
+          <button onclick="handleDayExport('${state.selectedDay||todayKey}')" style="padding:6px 12px;background:linear-gradient(135deg,#16a34a,#15803d);color:#fff;border:none;border-radius:7px;font-size:11px;font-weight:700;cursor:pointer">⬇️ Export</button>
+        </div>
+      </div>
+
+      <!-- Day cards scrollable (last 14 days) -->
+      <div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;margin-bottom:14px">
+        ${dayList.slice(0,14).map(d=>`
+          <div onclick="state.selectedDay='${d.key}';render()" style="flex-shrink:0;min-width:80px;background:${d.key===state.selectedDay?'linear-gradient(135deg,#f59e0b,#d97706)':'#f8fafc'};border-radius:10px;padding:10px 12px;cursor:pointer;border:1.5px solid ${d.key===state.selectedDay?'#f59e0b':d.key===todayKey?'#fde68a':'#e2e8f0'};transition:all .15s">
+            <div style="font-size:9px;font-weight:700;color:${d.key===state.selectedDay?'#fef3c7':'#64748b'};text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px">${new Date(d.key).toLocaleDateString('en-IN',{weekday:'short'})}</div>
+            <div style="font-size:10px;font-weight:800;color:${d.key===state.selectedDay?'#fff':'#0f172a'}">${new Date(d.key).toLocaleDateString('en-IN',{day:'2-digit',month:'short'})}</div>
+            <div style="font-size:10px;font-weight:800;color:${d.key===state.selectedDay?'#fff':'#16a34a'};margin-top:2px">${fc(d.total)}</div>
+            <div style="font-size:9px;color:${d.key===state.selectedDay?'#fef9c3':'#94a3b8'};margin-top:1px">${d.count} pmt${d.count!==1?'s':''}</div>
+          </div>`).join('')}
+        ${!dayList.length?`<div style="color:#94a3b8;font-size:12px;padding:16px">No collections recorded yet.</div>`:''}
+      </div>
+
+      <!-- Selected day detail -->
+      ${selDayData?`
+      <div style="border-top:1px solid #f1f5f9;padding-top:14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+          <div>
+            <div style="font-size:13px;font-weight:700;color:#0f172a">${selDayData.label}</div>
+            <div style="font-size:10px;color:#64748b">${selDayData.count} payment${selDayData.count!==1?'s':''} · ${[...new Set(selDayData.entries.map(e=>e.custName))].length} customers</div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-size:18px;font-weight:800;color:#f59e0b;font-family:'Playfair Display',serif">${fc(selDayData.total)}</div>
+            <div style="font-size:10px;color:#64748b">Collected this day</div>
+          </div>
+        </div>
+        <!-- Payment mode breakdown -->
+        ${(()=>{
+          const modes={};
+          selDayData.entries.forEach(e=>{modes[e.mode]=(modes[e.mode]||0)+e.amount;});
+          return `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">
+            ${Object.entries(modes).map(([m,v])=>`
+              <div style="background:#fef3c7;border:1px solid #fde68a;border-radius:7px;padding:5px 10px;font-size:10px">
+                <span style="font-weight:700;color:#d97706">${fc(v)}</span>
+                <span style="color:#64748b;margin-left:4px">${m}</span>
+              </div>`).join('')}
+          </div>`;
+        })()}
+        <!-- Entries list -->
+        <div style="max-height:300px;overflow-y:auto">
+          ${[...selDayData.entries].sort((a,b)=>b.amount-a.amount).map((x,i)=>`
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:${i%2?'#fff':'#fffbeb'};border-radius:7px;margin-bottom:3px;font-size:11px;gap:8px;flex-wrap:wrap">
+              <div style="flex:1;min-width:100px">
+                <div style="font-weight:700;color:#0f172a">${x.custName}</div>
+                <div style="font-size:10px;color:#64748b">${x.refNo||'No Ref'}${x.note?' · '+x.note:''}</div>
+              </div>
+              <div style="display:flex;align-items:center;gap:6px">
+                <span style="background:#fef3c7;color:#d97706;padding:1px 6px;border-radius:4px;font-size:10px">${x.mode}</span>
+                <span style="font-weight:800;color:#16a34a">${fc(x.amount)}</span>
+              </div>
+            </div>`).join('')}
+        </div>
+      </div>`:`
+      <div style="text-align:center;padding:20px;color:#94a3b8;font-size:12px">
+        <div style="font-size:28px;margin-bottom:6px">📭</div>
+        No collections on ${new Date(state.selectedDay||todayKey).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'})}
+      </div>`}
     </div>
 
     <!-- Month-wise Summary Bar -->
