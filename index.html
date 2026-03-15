@@ -1672,7 +1672,7 @@ function render() {
           </div>
           <div class="field-wrap"><label class="field-label">Message</label><textarea class="inp" id="remMsg" style="min-height:110px;resize:vertical">${defaultMsg}</textarea></div>
           <div style="display:flex;gap:7px;flex-wrap:wrap">
-            ${c.phone?`<a href="https://wa.me/91${c.phone}?text=${encodeURIComponent(defaultMsg)}" target="_blank" onclick="handleSendReminder('${c.id}','whatsapp')" style="flex:1;padding:9px 12px;background:#25D366;color:#fff;border-radius:7px;font-size:12px;font-weight:600;display:inline-flex;align-items:center;justify-content:center;gap:5px;text-decoration:none">${IC.wa} WhatsApp</a>`:''}
+            ${c.phone?`<button onclick="window.open('https://wa.me/91${c.phone}?text='+encodeURIComponent(defaultMsg),'_blank');handleSendReminder('${c.id}','whatsapp')" style="flex:1;padding:9px 12px;background:#25D366;color:#fff;border:none;border-radius:7px;font-size:12px;font-weight:600;display:inline-flex;align-items:center;justify-content:center;gap:5px;cursor:pointer">${IC.wa} WhatsApp</button>`:''}
             ${c.phone?`<a href="sms:${c.phone}" onclick="handleSendReminder('${c.id}','sms')" style="flex:1;padding:9px 12px;background:#3b82f6;color:#fff;border-radius:7px;font-size:12px;font-weight:600;display:inline-flex;align-items:center;justify-content:center;gap:5px;text-decoration:none">${IC.sms} SMS</a>`:''}
             <button onclick="navigator.clipboard.writeText(document.getElementById('remMsg').value);handleSendReminder('${c.id}','copy');" style="flex:1;padding:9px 12px;background:#7c3aed;color:#fff;border:none;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer">📋 Copy</button>
           </div>
