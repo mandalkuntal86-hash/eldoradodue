@@ -19,6 +19,7 @@ input:focus,textarea:focus,select:focus{border-color:#2563eb!important;backgroun
 .ab:hover{opacity:.76}
 .rc:hover{box-shadow:0 4px 15px rgba(37,99,235,0.10)!important;transform:translateY(-1px)}
 @keyframes spin{to{transform:rotate(360deg)}}
+@keyframes pulse{0%,100%{transform:scale(.6);opacity:.4}50%{transform:scale(1);opacity:1}}
 @keyframes fadeIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
 .modal-overlay{position:fixed;inset:0;background:rgba(10,18,40,0.76);z-index:200;display:flex;align-items:center;justify-content:center;padding:14px}
 .modal-box{background:#fff;border-radius:16px;width:100%;max-width:500px;max-height:94vh;overflow-y:auto;box-shadow:0 24px 64px rgba(0,0,0,0.32);animation:fadeIn 0.18s ease}
@@ -85,6 +86,9 @@ let state = {
   showFbSetup: false,
   showEmpMgr: false,
   empInput: '',
+  aiMessages: [],
+  aiInput: '',
+  aiLoading: false,
   fbForm: { apiKey:'', authDomain:'', databaseURL:'', projectId:'' },
   form: { name:'', phone:'', email:'', refNo:'', amount:'', dueDate:'', reminderDate:'', reminderNote:'', notes:'', priority: false, assignedEmp:'' }
 };
@@ -390,7 +394,7 @@ const IC = {
   add:    `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>`,
   bulk:   `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>`,
   bell:   `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>`,
-  collect:`<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>`,
+  collect:`<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><text x="3" y="18" font-size="18" font-weight="bold" stroke="none" fill="currentColor">₹</text></svg>`,
   del:    `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>`,
   edit:   `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`,
   chk:    `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>`,
@@ -406,6 +410,7 @@ const IC = {
   shield: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>`,
   trash:  `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>`,
   restore:`<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>`,
+  ai:     `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a7 7 0 0 1 7 7c0 4-3 6-3 9H8c0-3-3-5-3-9a7 7 0 0 1 7-7z"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="10" y1="21" x2="10" y2="18"/><line x1="14" y1="21" x2="14" y2="18"/></svg>`,
 };
 
 // ── HANDLERS ─────────────────────────────────────────────────────────────────
@@ -832,8 +837,8 @@ function statCard(label,value,accent,sub,icon){
 function render() {
   const {unpaid,overdue,dueToday,upcoming,totalPending,totalCollected,remindersToday,filtered,collectionReport} = computed();
   const A='#2563eb';
-  const TABS=['Dashboard','Customers','Priority','Add Due','Bulk Import','Collection','Reminders','Backup'];
-  const TAB_ICONS=[IC.dash,IC.cust,IC.add,IC.bulk,IC.collect,IC.bell,IC.shield];
+  const TABS=['Dashboard','Customers','Priority','Add Due','Bulk Import','Collection','Reminders','AI Assistant','Backup'];
+  const TAB_ICONS=[IC.dash, IC.cust, IC.warn, IC.add, IC.bulk, IC.collect, IC.bell, IC.ai, IC.restore];
 
   // NAV
   const nav = TABS.map((t,i)=>`
@@ -1442,6 +1447,72 @@ function render() {
   }
 
   // ── BACKUP ──
+  // ── AI ASSISTANT ──
+  if(state.tab==='AI Assistant'){
+    html+=`
+    <div style="max-width:680px;margin:0 auto">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
+        <div style="width:38px;height:38px;border-radius:12px;background:linear-gradient(135deg,#7c3aed,#2563eb);display:flex;align-items:center;justify-content:center;font-size:18px">🤖</div>
+        <div>
+          <h2 style="margin:0;font-size:19px;font-weight:800;color:#0f172a;font-family:'Playfair Display',serif">AI Assistant</h2>
+          <p style="margin:0;font-size:11px;color:#64748b">Ask anything about your customers, dues, collections & more</p>
+        </div>
+      </div>
+
+      <!-- Suggested prompts -->
+      ${state.aiMessages.length===0?`
+      <div style="margin-bottom:16px">
+        <div style="font-size:11px;font-weight:600;color:#64748b;margin-bottom:8px">💡 Try asking:</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          ${[
+            'Who are my top overdue customers?',
+            'Total pending this month?',
+            'Which employee has most pending?',
+            'List all priority customers',
+            'Who paid this week?',
+            'Customers due in next 7 days?'
+          ].map(q=>`<button onclick="document.getElementById('aiInp').value='${q}';state.aiInput='${q}';document.getElementById('aiInp').focus()" style="padding:6px 12px;background:#f0f4ff;color:#2563eb;border:1.5px solid #bfdbfe;border-radius:20px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap">${q}</button>`).join('')}
+        </div>
+      </div>`:''}
+
+      <!-- Chat messages -->
+      <div id="aiChat" style="min-height:220px;max-height:440px;overflow-y:auto;margin-bottom:14px;display:flex;flex-direction:column;gap:10px">
+        ${state.aiMessages.length===0?`
+          <div style="text-align:center;padding:40px 20px;color:#94a3b8">
+            <div style="font-size:40px;margin-bottom:8px">🤖</div>
+            <div style="font-size:13px;font-weight:600;color:#475569">Hi! I'm your DueMaster AI Assistant</div>
+            <div style="font-size:11px;margin-top:4px">I know all your customer data. Ask me anything!</div>
+          </div>`
+        :state.aiMessages.map(m=>`
+          <div style="display:flex;${m.role==='user'?'justify-content:flex-end':'justify-content:flex-start'}">
+            <div style="max-width:85%;padding:10px 14px;border-radius:${m.role==='user'?'14px 14px 4px 14px':'14px 14px 14px 4px'};background:${m.role==='user'?'linear-gradient(135deg,#2563eb,#1d4ed8)':'#fff'};color:${m.role==='user'?'#fff':'#0f172a'};font-size:12px;line-height:1.6;box-shadow:0 2px 8px rgba(0,0,0,0.08);white-space:pre-wrap">${m.content}</div>
+          </div>`).join('')}
+        ${state.aiLoading?`
+          <div style="display:flex;justify-content:flex-start">
+            <div style="padding:10px 16px;background:#fff;border-radius:14px 14px 14px 4px;box-shadow:0 2px 8px rgba(0,0,0,0.08)">
+              <div style="display:flex;gap:4px;align-items:center">
+                <div style="width:7px;height:7px;border-radius:50%;background:#7c3aed;animation:pulse 1s ease infinite"></div>
+                <div style="width:7px;height:7px;border-radius:50%;background:#7c3aed;animation:pulse 1s ease infinite;animation-delay:.2s"></div>
+                <div style="width:7px;height:7px;border-radius:50%;background:#7c3aed;animation:pulse 1s ease infinite;animation-delay:.4s"></div>
+              </div>
+            </div>
+          </div>`:''}
+      </div>
+
+      <!-- Input -->
+      <div style="display:flex;gap:8px;align-items:flex-end;background:#fff;border-radius:14px;padding:10px 12px;box-shadow:0 2px 12px rgba(0,0,0,0.08);border:1.5px solid #e2e8f0">
+        <textarea id="aiInp" placeholder="Ask about your customers, dues, collections…" oninput="state.aiInput=this.value;this.style.height='auto';this.style.height=Math.min(this.scrollHeight,120)+'px'"
+          onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendAiMessage();}"
+          style="flex:1;border:none;outline:none;font-size:13px;font-family:inherit;resize:none;height:38px;color:#0f172a;background:transparent;line-height:1.5">${state.aiInput||''}</textarea>
+        <button onclick="sendAiMessage()" ${state.aiLoading?'disabled':''} style="padding:9px 18px;background:linear-gradient(135deg,#7c3aed,#2563eb);color:#fff;border:none;border-radius:9px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;flex-shrink:0;opacity:${state.aiLoading?'.6':'1'}">
+          ${state.aiLoading?'…':'Send ➤'}
+        </button>
+      </div>
+      ${state.aiMessages.length>0?`<div style="text-align:center;margin-top:8px"><button onclick="state.aiMessages=[];state.aiInput='';render()" style="padding:4px 12px;background:transparent;color:#94a3b8;border:1px solid #e2e8f0;border-radius:6px;font-size:10px;cursor:pointer">Clear chat</button></div>`:''}
+    </div>`;
+  }
+
+  // ── BACKUP ──
   if(state.tab==='Backup'){
     html+=`<div style="max-width:640px;margin:0 auto">
       <h2 style="margin:0 0 4px;font-size:19px;font-weight:800;color:#0f172a;font-family:'Playfair Display',serif">🛡️ Backup & Data Management</h2>
@@ -1900,6 +1971,84 @@ function render() {
 }
 
 // ── GLOBAL ACTION HELPERS ────────────────────────────────────────────────────
+async function sendAiMessage() {
+  const inp = document.getElementById('aiInp');
+  const msg = (inp ? inp.value : state.aiInput).trim();
+  if (!msg || state.aiLoading) return;
+
+  // Build a data summary for the AI
+  const today = new Date().toISOString().split('T')[0];
+  const totalPend = state.customers.reduce((s,c)=>s+collectBalance(c).balance,0);
+  const totalColl = state.customers.reduce((s,c)=>s+(c.collections||[]).reduce((a,x)=>a+x.amount,0),0);
+  const overdueCusts = state.customers.filter(c=>!c.paid&&daysFrom(c.dueDate)>0);
+  const priorityCusts = state.customers.filter(c=>c.priority&&!c.paid);
+
+  // Today's collections
+  const todayColls = [];
+  state.customers.forEach(c=>(c.collections||[]).forEach(x=>{if(x.date===today) todayColls.push({customer:c.name,amount:x.amount,mode:x.mode});}));
+
+  // Employee summary
+  const empSummary = state.employees.map(e=>{
+    const assigned = state.customers.filter(c=>c.assignedEmp===e);
+    return {name:e, customers:assigned.length, pending:assigned.reduce((s,c)=>s+collectBalance(c).balance,0)};
+  });
+
+  const systemPrompt = `You are an AI assistant for DueMaster Pro, a customer due management app. You have access to real business data. Be concise, helpful and specific. Use ₹ for amounts. Today is ${today}.
+
+BUSINESS DATA SUMMARY:
+- Total customers: ${state.customers.length}
+- Total pending: ₹${totalPend.toLocaleString('en-IN')}
+- Total collected all time: ₹${totalColl.toLocaleString('en-IN')}
+- Overdue customers: ${overdueCusts.length}
+- Priority customers (unpaid): ${priorityCusts.length}
+- Employees: ${state.employees.join(', ')||'None'}
+- Today's collections: ${todayColls.length} payments totaling ₹${todayColls.reduce((s,x)=>s+x.amount,0).toLocaleString('en-IN')}
+
+TOP OVERDUE CUSTOMERS (max 15):
+${overdueCusts.sort((a,b)=>collectBalance(b).balance-collectBalance(a).balance).slice(0,15).map(c=>`- ${c.name} | Ref:${c.refNo||'N/A'} | Balance:₹${collectBalance(c).balance.toLocaleString('en-IN')} | Overdue by ${daysFrom(c.dueDate)} days | Employee:${c.assignedEmp||'Unassigned'} | Phone:${c.phone||'N/A'}`).join('\n')}
+
+PRIORITY CUSTOMERS:
+${priorityCusts.slice(0,10).map(c=>`- ${c.name} | Balance:₹${collectBalance(c).balance.toLocaleString('en-IN')} | Employee:${c.assignedEmp||'Unassigned'}`).join('\n')||'None'}
+
+EMPLOYEE PERFORMANCE:
+${empSummary.map(e=>`- ${e.name}: ${e.customers} customers, ₹${e.pending.toLocaleString('en-IN')} pending`).join('\n')||'No employees'}
+
+ALL CUSTOMERS (max 30):
+${state.customers.slice(0,30).map(c=>{const{collected,balance}=collectBalance(c);return `- ${c.name}|${c.refNo||''}|Due:${c.dueDate}|Total:₹${c.amount}|Collected:₹${collected}|Balance:₹${balance}|${c.paid?'PAID':'UNPAID'}|Priority:${c.priority?'YES':'NO'}|Emp:${c.assignedEmp||'-'}|Phone:${c.phone||'-'}`;}).join('\n')}`;
+
+  // Add user message
+  state.aiMessages.push({role:'user', content: msg});
+  state.aiInput = '';
+  state.aiLoading = true;
+  if(inp) inp.value = '';
+  render();
+
+  // Scroll to bottom
+  setTimeout(()=>{const el=document.getElementById('aiChat');if(el)el.scrollTop=el.scrollHeight;},50);
+
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1000,
+        system: systemPrompt,
+        messages: state.aiMessages.map(m=>({role:m.role, content:m.content}))
+      })
+    });
+    const data = await response.json();
+    const reply = data.content?.[0]?.text || 'Sorry, I could not get a response.';
+    state.aiMessages.push({role:'assistant', content: reply});
+  } catch(e) {
+    state.aiMessages.push({role:'assistant', content:'❌ Error connecting to AI. Please check your internet connection and try again.'});
+  }
+
+  state.aiLoading = false;
+  render();
+  setTimeout(()=>{const el=document.getElementById('aiChat');if(el)el.scrollTop=el.scrollHeight;},50);
+}
+
 function handleSearch(val) {
   state.search = val;
   // Re-render customer list only, not full page
