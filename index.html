@@ -1671,25 +1671,8 @@ function render() {
             <strong style="color:${days>0?'#ef4444':'#22c55e'}">${days>0?days+' days overdue':'Upcoming'}</strong>
           </div>
           <div class="field-wrap"><label class="field-label">Message</label><textarea class="inp" id="remMsg" style="min-height:110px;resize:vertical">${defaultMsg}</textarea></div>
-          ${c.phone?`<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:8px 12px;margin-bottom:10px;font-size:11px;color:#166534;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px">
-            <span>📱 Direct WhatsApp link (works everywhere):</span>
-            <a href="https://wa.me/91${c.phone}" target="_blank" rel="noopener noreferrer" onclick="navigator.clipboard.writeText(document.getElementById('remMsg').value).catch(()=>{})" style="font-weight:700;color:#16a34a;text-decoration:underline">Open WhatsApp Chat →</a>
-          </div>`:''}
           <div style="display:flex;gap:7px;flex-wrap:wrap">
-            ${c.phone?`<button onclick="(()=>{
-              const msg=document.getElementById('remMsg').value;
-              const phone='91${c.phone}';
-              const isMobile=/Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-              const isIframe=window.self!==window.top;
-              if(isIframe){
-                navigator.clipboard.writeText(msg).catch(()=>{});
-                showToast('📋 Message copied! Open WhatsApp manually and paste.','info');
-                return;
-              }
-              const url=isMobile?'https://wa.me/'+phone+'?text='+encodeURIComponent(msg):'https://web.whatsapp.com/send/?phone='+phone+'&text='+encodeURIComponent(msg)+'&app_absent=0';
-              window.open(url,'_blank');
-              handleSendReminder('${c.id}','whatsapp');
-            })()" style="flex:1;padding:9px 12px;background:#25D366;color:#fff;border:none;border-radius:7px;font-size:12px;font-weight:600;display:inline-flex;align-items:center;justify-content:center;gap:5px;cursor:pointer">${IC.wa} WhatsApp</button>`:''}
+            ${c.phone?`<a href="https://wa.me/91${c.phone}?text=${encodeURIComponent(defaultMsg)}" target="_blank" rel="noopener noreferrer" onclick="handleSendReminder('${c.id}','whatsapp')" style="flex:1;padding:9px 12px;background:#25D366;color:#fff;border-radius:7px;font-size:12px;font-weight:600;display:inline-flex;align-items:center;justify-content:center;gap:5px;text-decoration:none">${IC.wa} WhatsApp</a>`:''}
             ${c.phone?`<a href="sms:${c.phone}" onclick="handleSendReminder('${c.id}','sms')" style="flex:1;padding:9px 12px;background:#3b82f6;color:#fff;border-radius:7px;font-size:12px;font-weight:600;display:inline-flex;align-items:center;justify-content:center;gap:5px;text-decoration:none">${IC.sms} SMS</a>`:''}
             <button onclick="navigator.clipboard.writeText(document.getElementById('remMsg').value);handleSendReminder('${c.id}','copy');" style="flex:1;padding:9px 12px;background:#7c3aed;color:#fff;border:none;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer">📋 Copy</button>
           </div>
