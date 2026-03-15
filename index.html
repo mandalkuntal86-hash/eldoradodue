@@ -15,6 +15,7 @@ input,textarea,select{font-family:inherit}
 input:focus,textarea:focus,select:focus{border-color:#2563eb!important;background:#fff!important;outline:none}
 ::-webkit-scrollbar{width:5px}
 ::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:3px}
+nav::-webkit-scrollbar{display:none}
 .tb:hover{background:rgba(255,255,255,0.12)!important}
 .ab:hover{opacity:.76}
 .rc:hover{box-shadow:0 4px 15px rgba(37,99,235,0.10)!important;transform:translateY(-1px)}
@@ -850,19 +851,28 @@ function render() {
 
   // HEADER
   let html = `
-  <div style="background:linear-gradient(135deg,#0f172a,#1e3a8a);padding:0 16px;position:sticky;top:0;z-index:50;box-shadow:0 4px 18px rgba(0,0,0,0.2)">
-    <div style="max-width:1160px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
-      <div style="display:flex;align-items:center;gap:10px;padding:10px 0">
-        <div style="width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#3b82f6,#1d4ed8);display:flex;align-items:center;justify-content:center;font-size:17px">💳</div>
-        <div>
-          <div style="color:#fff;font-weight:800;font-size:14px;font-family:'Playfair Display',serif">DueMaster Pro</div>
-          <div style="color:#93c5fd;font-size:9px;font-weight:500;letter-spacing:.08em;text-transform:uppercase">Due · Collection · Reminder <span style="background:#16a34a;color:#fff;border-radius:4px;padding:1px 5px;font-size:8px;font-weight:700">💾 SAVED</span> ${state.syncStatus.msg?`<span id="syncBadge" style="background:${state.syncStatus.color};color:#fff;border-radius:4px;padding:1px 5px;font-size:8px;font-weight:700;margin-left:3px">${state.syncStatus.msg}</span>`:`<span id="syncBadge" style="display:none"></span>`}</div>
+  <div style="background:linear-gradient(135deg,#0f172a,#1e3a8a);padding:0 12px;position:sticky;top:0;z-index:50;box-shadow:0 4px 18px rgba(0,0,0,0.2)">
+    <div style="max-width:1160px;margin:0 auto">
+      <!-- Top row: logo + title -->
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0 4px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <div style="width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#3b82f6,#1d4ed8);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0">💳</div>
+          <div>
+            <div style="color:#fff;font-weight:800;font-size:13px;font-family:'Playfair Display',serif;line-height:1.2">DueMaster Pro</div>
+            <div style="color:#93c5fd;font-size:8px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;line-height:1.3">Due · Collection · Reminder
+              <span style="background:#16a34a;color:#fff;border-radius:3px;padding:1px 4px;font-size:7px;font-weight:700">💾 SAVED</span>
+              ${state.syncStatus.msg?`<span id="syncBadge" style="background:${state.syncStatus.color};color:#fff;border-radius:3px;padding:1px 4px;font-size:7px;font-weight:700;margin-left:2px">${state.syncStatus.msg}</span>`:`<span id="syncBadge" style="display:none"></span>`}
+            </div>
+            <div style="color:#60a5fa;font-size:7.5px;font-weight:600;letter-spacing:.04em;margin-top:1px">Developed by Kuntal Mandal</div>
+          </div>
         </div>
       </div>
-      <nav style="display:flex;gap:1px;flex-wrap:wrap">${nav}</nav>
+      <!-- Nav row: scrollable on mobile -->
+      <nav style="display:flex;gap:1px;flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px;-webkit-overflow-scrolling:touch;scrollbar-width:none">${nav}</nav>
     </div>
   </div>
-  <div style="max-width:1160px;margin:0 auto;padding:18px 14px">`;
+  <div style="max-width:1160px;margin:0 auto;padding:14px 10px">`;
+
 
   // ── DASHBOARD ──
   if(state.tab==='Dashboard'){
@@ -1589,6 +1599,12 @@ function render() {
   }
 
   html+=`</div>`; // close main content
+
+  // ── FOOTER ──
+  html+=`<div style="text-align:center;padding:16px 14px 28px;border-top:1px solid #e2e8f0;margin-top:8px">
+    <div style="font-size:12px;font-weight:700;color:#0f172a;font-family:'Playfair Display',serif">DueMaster Pro</div>
+    <div style="font-size:11px;color:#64748b;margin-top:4px">Developed by <strong style="color:#2563eb">Kuntal Mandal</strong></div>
+  </div>`;
 
   // ── MODALS ──
   // Collection Modal
