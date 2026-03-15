@@ -2027,26 +2027,190 @@ ${state.customers.slice(0,30).map(c=>{const{collected,balance}=collectBalance(c)
   setTimeout(()=>{const el=document.getElementById('aiChat');if(el)el.scrollTop=el.scrollHeight;},50);
 
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1000,
-        system: systemPrompt,
-        messages: state.aiMessages.map(m=>({role:m.role, content:m.content}))
-      })
-    });
-    const data = await response.json();
-    const reply = data.content?.[0]?.text || 'Sorry, I could not get a response.';
+    const reply = localAI(msg);
+    // Simulate slight delay for natural feel
+    await new Promise(r => setTimeout(r, 600));
     state.aiMessages.push({role:'assistant', content: reply});
   } catch(e) {
-    state.aiMessages.push({role:'assistant', content:'❌ Error connecting to AI. Please check your internet connection and try again.'});
+    state.aiMessages.push({role:'assistant', content:'❌ Something went wrong. Please try again.'});
   }
 
   state.aiLoading = false;
   render();
   setTimeout(()=>{const el=document.getElementById('aiChat');if(el)el.scrollTop=el.scrollHeight;},50);
+}
+
+function localAI(q) {
+  const ql = q.toLowerCase();
+  const today = new Date(); today.setHours(0,0,0,0);
+  const todayKey = today.toISOString().split('T')[0];
+
+  // Helper: balance of a customer
+  const bal = c => collectBalance(c).balance;
+  const coll = c => collectBalance(c).collected;
+
+  // All unpaid
+  const unpaidList = state.customers.filter(c=>!c.paid);
+  const paidList   = state.customers.filter(c=>c.paid);
+  const totalPend  = unpaidList.reduce((s,c)=>s+bal(c),0);
+  const totalColl  = state.customers.reduce((s,c)=>s+coll(c),0);
+
+  // Overdue
+  const overdue = unpaidList.filter(c=>daysFrom(c.dueDate)>0).sort((a,b)=>bal(b)-bal(a));
+
+  // Today collections
+  const todayColls=[];
+  state.customers.forEach(c=>(c.collections||[]).forEach(x=>{if(x.date===todayKey)todayColls.push({name:c.name,amount:x.amount,mode:x.mode});}));
+  const todayTotal = todayColls.reduce((s,x)=>s+x.amount,0);
+
+  // This week
+  const weekAgo = new Date(today); weekAgo.setDate(weekAgo.getDate()-7);
+  const weekColls=[]; 
+  state.customers.forEach(c=>(c.collections||[]).forEach(x=>{if(x.date&&new Date(x.date)>=weekAgo)weekColls.push({name:c.name,amount:x.amount,date:x.date,mode:x.mode});}));
+  const weekTotal = weekColls.reduce((s,x)=>s+x.amount,0);
+
+  // This month
+  const thisMonth = todayKey.slice(0,7);
+  const monthColls=[];
+  state.customers.forEach(c=>(c.collections||[]).forEach(x=>{if((x.date||'').startsWith(thisMonth))monthColls.push({name:c.name,amount:x.amount});}));
+  const monthTotal = monthColls.reduce((s,x)=>s+x.amount,0);
+
+  // Priority
+  const priorityList = unpaidList.filter(c=>c.priority).sort((a,b)=>bal(b)-bal(a));
+
+  // Due in next N days
+  const dueInDays = (n) => unpaidList.filter(c=>{const d=daysFrom(c.dueDate);return d!==null&&d>=-n&&d<=0;}).sort((a,b)=>bal(b)-bal(a));
+
+  // Employee summary
+  const empSummary = state.employees.map(e=>{
+    const assigned = state.customers.filter(c=>c.assignedEmp===e);
+    const pending = assigned.reduce((s,c)=>s+bal(c),0);
+    return {name:e, count:assigned.length, pending, priority:assigned.filter(c=>c.priority&&!c.paid).length};
+  }).sort((a,b)=>b.pending-a.pending);
+
+  // ── MATCH INTENT ──
+
+  // Summary / overview
+  if(/summary|overview|report|status|total|how many/i.test(q)){
+    return `📊 *Business Summary*\n\n` +
+      `👥 Total Customers: ${state.customers.length}\n` +
+      `✅ Paid: ${paidList.length}\n` +
+      `❌ Unpaid: ${unpaidList.length}\n` +
+      `⚠️ Overdue: ${overdue.length}\n` +
+      `⭐ Priority (unpaid): ${priorityList.length}\n\n` +
+      `💰 Total Pending: ${fc(totalPend)}\n` +
+      `✅ Total Collected: ${fc(totalColl)}\n` +
+      `📅 Collected Today: ${fc(todayTotal)}\n` +
+      `📆 Collected This Month: ${fc(monthTotal)}\n` +
+      `👥 Employees: ${state.employees.length}`;
+  }
+
+  // Today collections
+  if(/today|aaj/i.test(q) && /collect|payment|paid|kitna/i.test(q)){
+    if(!todayColls.length) return `📅 No collections recorded today (${fd(todayKey)}) yet.`;
+    return `📅 *Today's Collections* (${fd(todayKey)})\n\n` +
+      todayColls.map(x=>`• ${x.name} — ${fc(x.amount)} (${x.mode})`).join('\n') +
+      `\n\n💰 Total: ${fc(todayTotal)}`;
+  }
+
+  // This week
+  if(/week|hafte/i.test(q) && /collect|payment|paid/i.test(q)){
+    if(!weekColls.length) return `📆 No collections in the last 7 days.`;
+    return `📆 *Last 7 Days Collections*\n\n` +
+      weekColls.sort((a,b)=>b.amount-a.amount).map(x=>`• ${x.name} — ${fc(x.amount)} on ${fd(x.date)}`).join('\n') +
+      `\n\n💰 Total: ${fc(weekTotal)}`;
+  }
+
+  // This month
+  if(/month|mahina/i.test(q) && /collect|payment|total|pending/i.test(q)){
+    return `📅 *This Month (${new Date().toLocaleDateString('en-IN',{month:'long',year:'numeric'})})*\n\n` +
+      `💰 Collected: ${fc(monthTotal)}\n` +
+      `❌ Pending: ${fc(totalPend)}\n` +
+      `Payments recorded: ${monthColls.length}`;
+  }
+
+  // Overdue / top pending
+  if(/overdue|overdues|top.*pending|most.*pending|highest.*pending|pending.*list|overdue.*list/i.test(q)){
+    if(!overdue.length) return `✅ Great news! No overdue customers right now.`;
+    const list = overdue.slice(0,10);
+    return `⚠️ *Top Overdue Customers* (${overdue.length} total)\n\n` +
+      list.map((c,i)=>`${i+1}. ${c.name} — ${fc(bal(c))} | ${daysFrom(c.dueDate)} days overdue${c.assignedEmp?' | 👤 '+c.assignedEmp:''}`).join('\n') +
+      (overdue.length>10?`\n\n...and ${overdue.length-10} more.`:'');
+  }
+
+  // Priority customers
+  if(/priority|priorit/i.test(q)){
+    if(!priorityList.length) return `⭐ No priority customers marked yet.\n\nGo to Customers tab and click ⭐ on any customer to mark them.`;
+    return `⭐ *Priority Customers* (${priorityList.length})\n\n` +
+      priorityList.slice(0,10).map((c,i)=>`${i+1}. ${c.name} — ${fc(bal(c))}${c.assignedEmp?' | 👤 '+c.assignedEmp:''}`).join('\n');
+  }
+
+  // Employee performance
+  if(/employee|staff|employ|worker|who.*most|most.*pending.*emp/i.test(q)){
+    if(!empSummary.length) return `👥 No employees added yet.\n\nGo to Priority tab → Manage Employees to add them.`;
+    return `👥 *Employee Performance*\n\n` +
+      empSummary.map((e,i)=>`${i+1}. ${e.name}\n   ${e.count} customers | ${fc(e.pending)} pending | ${e.priority} priority`).join('\n\n') +
+      `\n\n🏆 Most pending: ${empSummary[0].name} (${fc(empSummary[0].pending)})`;
+  }
+
+  // Due in next 7 days
+  if(/next.*7|7.*day|next.*week|upcoming|due soon/i.test(q)){
+    const soon = dueInDays(7);
+    if(!soon.length) return `✅ No customers due in the next 7 days.`;
+    return `📅 *Due in Next 7 Days* (${soon.length} customers)\n\n` +
+      soon.slice(0,10).map(c=>`• ${c.name} — ${fc(bal(c))} | Due: ${fd(c.dueDate)}`).join('\n');
+  }
+
+  // Who paid / recently paid
+  if(/who.*paid|paid.*recently|recent.*payment/i.test(q)){
+    const recent = [];
+    state.customers.forEach(c=>(c.collections||[]).forEach(x=>recent.push({name:c.name,amount:x.amount,date:x.date,mode:x.mode})));
+    recent.sort((a,b)=>new Date(b.date)-new Date(a.date));
+    if(!recent.length) return `No payment records found yet.`;
+    return `💰 *Recent Payments*\n\n` +
+      recent.slice(0,10).map(x=>`• ${x.name} — ${fc(x.amount)} on ${fd(x.date)} (${x.mode})`).join('\n');
+  }
+
+  // Search specific customer
+  const custMatch = state.customers.find(c=>c.name.toLowerCase().includes(ql)||( c.refNo&&c.refNo.toLowerCase().includes(ql)));
+  if(custMatch){
+    const {collected,balance} = collectBalance(custMatch);
+    return `👤 *${custMatch.name}*\n\n` +
+      `Ref: ${custMatch.refNo||'N/A'}\n` +
+      `Phone: ${custMatch.phone||'N/A'}\n` +
+      `Total Due: ${fc(custMatch.amount)}\n` +
+      `Collected: ${fc(collected)}\n` +
+      `Balance: ${fc(balance)}\n` +
+      `Due Date: ${fd(custMatch.dueDate)}\n` +
+      `Status: ${custMatch.paid?'✅ Paid':'❌ Unpaid'}\n` +
+      `Priority: ${custMatch.priority?'⭐ Yes':'No'}\n` +
+      `Employee: ${custMatch.assignedEmp||'Unassigned'}\n` +
+      `Payments: ${(custMatch.collections||[]).length}`;
+  }
+
+  // Pending total
+  if(/pending|baaki|balance|total.*due/i.test(q)){
+    return `💰 *Pending Summary*\n\n` +
+      `Total Pending: ${fc(totalPend)}\n` +
+      `Unpaid Customers: ${unpaidList.length}\n` +
+      `Overdue: ${overdue.length}\n` +
+      `Highest pending: ${overdue[0]?overdue[0].name+' ('+fc(bal(overdue[0]))+')':'N/A'}`;
+  }
+
+  // No match — helpful fallback
+  if(!state.customers.length) return `📭 No customer data yet. Add customers first and I can help you analyse your business!`;
+
+  return `🤖 I can help you with:\n\n` +
+    `• "Summary" — business overview\n` +
+    `• "Overdue customers" — who hasn't paid\n` +
+    `• "Today's collections" — today's payments\n` +
+    `• "This week / month collections"\n` +
+    `• "Priority customers"\n` +
+    `• "Employee performance"\n` +
+    `• "Due in next 7 days"\n` +
+    `• "Who paid recently"\n` +
+    `• Customer name — details about that customer\n\n` +
+    `Try one of the suggestions above! 👆`;
 }
 
 function handleSearch(val) {
